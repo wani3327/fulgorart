@@ -1334,6 +1334,7 @@ dependencies = [
  "fulgorart-core",
  "fulgorart-db",
  "fulgorart-storage",
+ "fulgorart-tagger",
  "http 1.4.0",
  "serde",
  "serde_json",
