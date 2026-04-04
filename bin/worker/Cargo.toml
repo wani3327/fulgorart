@@ -1,0 +1,20 @@
+[package]
+name = "fulgorart-worker"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "fulgorart-worker"
+path = "src/main.rs"
+
+[dependencies]
+fulgorart-core = { path = "../../crates/core" }
+fulgorart-db = { path = "../../crates/db" }
+fulgorart-storage = { path = "../../crates/storage" }
+fulgorart-tagger = { path = "../../crates/tagger" }
+fulgorart-ingestor = { path = "../../crates/ingestor" }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+dotenvy = { workspace = true }

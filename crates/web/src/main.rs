@@ -10,7 +10,6 @@ use base64::Engine;
 use fulgorart_core::AppConfig;
 use fulgorart_db::{Db, ImageAssetRow, TagRow};
 use fulgorart_storage::R2Client;
-use fulgorart_tagger::{OnnxTagger, TaggerWorker};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::instrument;
@@ -310,35 +309,6 @@ async fn main() -> anyhow::Result<()> {
         r2: Arc::new(r2),
         config: Arc::new(config.clone()),
     };
-
-    // Spawn background tagger polling task (runs every 30 seconds)
-    {
-        let poll_db = state.db.clone();
-        let poll_config = Arc::clone(&state.config);
-        tokio::spawn(async move {
-            let tagger = match OnnxTagger::new(
-                &poll_config.wd14_model_path,
-                poll_config.wd14_general_threshold,
-                poll_config.wd14_character_threshold,
-            ) {
-                Ok(t) => t,
-                Err(e) => {
-                    tracing::error!("Failed to initialize tagger: {}", e);
-                    return;
-                }
-            };
-            let worker = TaggerWorker::new(poll_db, Box::new(tagger));
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
-            loop {
-                interval.tick().await;
-                match worker.run_once().await {
-                    Ok(n) if n > 0 => tracing::info!("Tagger processed {} job(s)", n),
-                    Ok(_) => tracing::debug!("Tagger: no pending jobs"),
-                    Err(e) => tracing::error!("Tagger poll error: {}", e),
-                }
-            }
-        });
-    }
 
     let app = Router::new()
         .route("/", get(get_index))
