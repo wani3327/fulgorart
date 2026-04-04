@@ -1293,6 +1293,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "fulgorart-ingestor-bin"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dotenvy",
+ "fulgorart-core",
+ "fulgorart-db",
+ "fulgorart-ingestor",
+ "fulgorart-storage",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "fulgorart-storage"
 version = "0.1.0"
 dependencies = [
@@ -1325,6 +1340,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "fulgorart-tagger-bin"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dotenvy",
+ "fulgorart-core",
+ "fulgorart-db",
+ "fulgorart-tagger",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "fulgorart-web"
 version = "0.1.0"
 dependencies = [
@@ -1340,22 +1369,6 @@ dependencies = [
  "tokio",
  "tower 0.4.13",
  "tower-http 0.5.2",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "fulgorart-worker"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "dotenvy",
- "fulgorart-core",
- "fulgorart-db",
- "fulgorart-ingestor",
- "fulgorart-storage",
- "fulgorart-tagger",
- "tokio",
  "tracing",
  "tracing-subscriber",
 ]

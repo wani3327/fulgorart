@@ -1,17 +1,16 @@
 [package]
-name = "fulgorart-worker"
+name = "fulgorart-ingestor-bin"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "fulgorart-worker"
+name = "fulgorart-ingestor"
 path = "src/main.rs"
 
 [dependencies]
 fulgorart-core = { path = "../../crates/core" }
 fulgorart-db = { path = "../../crates/db" }
 fulgorart-storage = { path = "../../crates/storage" }
-fulgorart-tagger = { path = "../../crates/tagger" }
 fulgorart-ingestor = { path = "../../crates/ingestor" }
 tokio = { workspace = true }
 anyhow = { workspace = true }

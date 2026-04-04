@@ -1,4 +1,4 @@
-.PHONY: build check test run-web run-cli fmt lint clean
+.PHONY: build check test run-web run-cli run-tagger run-ingestor fmt lint clean
 
 build:
 	cargo build --release
@@ -14,6 +14,12 @@ run-web:
 
 run-cli:
 	cargo run --bin fulgorart-cli -- --help
+
+run-tagger:
+	cargo run --bin fulgorart-tagger
+
+run-ingestor:
+	cargo run --bin fulgorart-ingestor
 
 fmt:
 	cargo fmt --all

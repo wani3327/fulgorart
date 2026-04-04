@@ -7,7 +7,8 @@ members = [
     "crates/ingestor",
     "crates/web",
     "bin/cli",
-    "bin/worker",
+    "bin/tagger",
+    "bin/ingestor",
 ]
 resolver = "2"
 
