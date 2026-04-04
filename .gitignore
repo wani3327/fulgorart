@@ -1,0 +1,20 @@
+# Rust build artifacts
+/target/
+
+# Environment files
+.env
+.env.local
+
+# SQLite database files
+*.db
+*.db-shm
+*.db-wal
+
+# WD14 model files
+*.onnx
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
