@@ -1,0 +1,10 @@
+/home/runner/work/fulgorart/fulgorart/target/debug/deps/aws_smithy_json-1fa1673123284c63.d: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aws-smithy-json-0.62.5/src/lib.rs /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aws-smithy-json-0.62.5/src/deserialize.rs /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aws-smithy-json-0.62.5/src/deserialize/error.rs /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aws-smithy-json-0.62.5/src/deserialize/token.rs /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aws-smithy-json-0.62.5/src/escape.rs /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aws-smithy-json-0.62.5/src/serialize.rs
+
+/home/runner/work/fulgorart/fulgorart/target/debug/deps/libaws_smithy_json-1fa1673123284c63.rmeta: /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aws-smithy-json-0.62.5/src/lib.rs /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aws-smithy-json-0.62.5/src/deserialize.rs /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aws-smithy-json-0.62.5/src/deserialize/error.rs /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aws-smithy-json-0.62.5/src/deserialize/token.rs /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aws-smithy-json-0.62.5/src/escape.rs /home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aws-smithy-json-0.62.5/src/serialize.rs
+
+/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aws-smithy-json-0.62.5/src/lib.rs:
+/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aws-smithy-json-0.62.5/src/deserialize.rs:
+/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aws-smithy-json-0.62.5/src/deserialize/error.rs:
+/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aws-smithy-json-0.62.5/src/deserialize/token.rs:
+/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aws-smithy-json-0.62.5/src/escape.rs:
+/home/runner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aws-smithy-json-0.62.5/src/serialize.rs:
