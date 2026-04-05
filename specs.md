@@ -25,7 +25,7 @@ Non-goals (for now):
 
 ### 2.1 Components
 
-- **Ingestor** (`bin/ingestor`, Rust):
+- **Ingestor** (`crates/ingestor`, Rust):
   - One-shot binary: run once and exit.
   - Polls source services for “liked” posts.
   - Extracts media URLs and metadata.
@@ -35,7 +35,7 @@ Non-goals (for now):
   - Enqueues images for tagging.
   - Scheduled via **cron** (e.g. `*/5 * * * *`).
 
-- **Tagger** (`bin/tagger`, Rust):
+- **Tagger** (`crates/tagger`, Rust):
   - One-shot binary: run once and exit.
   - Pulls all pending images from the tag job queue.
   - Runs **WD14** (prefer ONNX runtime if feasible, otherwise shell-out to Python as a separate process).

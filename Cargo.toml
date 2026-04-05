@@ -1,14 +1,12 @@
 [workspace]
 members = [
+    "crates/cli",
     "crates/core",
     "crates/db",
     "crates/storage",
     "crates/tagger",
     "crates/ingestor",
     "crates/web",
-    "bin/cli",
-    "bin/tagger",
-    "bin/ingestor",
 ]
 resolver = "2"
 
