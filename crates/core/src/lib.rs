@@ -97,6 +97,7 @@ pub struct AppConfig {
     pub password: Option<String>,
     pub port: u16,
     pub wd14_model_path: String,
+    pub wd14_labels_path: String,
     pub wd14_general_threshold: f32,
     pub wd14_character_threshold: f32,
 }
@@ -122,6 +123,8 @@ impl AppConfig {
                 .unwrap_or(3000),
             wd14_model_path: std::env::var("WD14_MODEL_PATH")
                 .unwrap_or_else(|_| "./models/wd14-convnext.onnx".to_string()),
+            wd14_labels_path: std::env::var("WD14_LABELS_PATH")
+                .unwrap_or_else(|_| "./models/selected_tags.csv".to_string()),
             wd14_general_threshold: std::env::var("WD14_GENERAL_THRESHOLD")
                 .ok()
                 .and_then(|v| v.parse().ok())

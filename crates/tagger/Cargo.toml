@@ -15,3 +15,9 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 async-trait = { workspace = true }
+ort = { version = "2.0.0-rc.12", features = ["load-dynamic", "ndarray"] }
+ndarray = "0.17"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+csv = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+bytes = "1"

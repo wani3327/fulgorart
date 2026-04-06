@@ -258,21 +258,22 @@ Optionally keep original file name in metadata.
 - R2:
   - S3-compatible client (AWS SDK for Rust or `s3` crate)
 - WD14:
-  - Prefer ONNX runtime (`ort` crate) if model available as ONNX.
-  - Fallback: run Python WD14 process and parse JSON output.
+  - ONNX runtime via the `ort` crate (`download-binaries` feature builds ONNX Runtime automatically).
+  - Image preprocessing: pad to square with white background → resize 448×448 → BGR float32 NHWC tensor.
+  - Labels loaded from `selected_tags.csv` (the WD14 model release artifact from SmilingWolf on HuggingFace).
+  - Env vars: `WD14_MODEL_PATH`, `WD14_LABELS_PATH`, `WD14_GENERAL_THRESHOLD`, `WD14_CHARACTER_THRESHOLD`.
 
 ## 10. MVP Milestones
 
-### Milestone 1 — Storage + DB skeleton
+### Milestone 1 — Storage + DB skeleton ✅
 - Setup DB schema
 - Implement R2 upload with metadata
 - CLI to import local images (for testing) into R2 and DB
 
-### Milestone 2 — WD14 tagging pipeline
+### Milestone 2 — WD14 tagging pipeline ✅
 - Tag job queue
-- Worker runs WD14
-- Store tags + scores
-- Mark failures and retry
+- `fulgorart-tagger` drains all pending jobs via ONNX WD14 inference (`ort` crate)
+- Store tags + scores; mark failures with error message
 
 ### Milestone 3 — Web gallery + detail pages
 - Thumbnail generation strategy (store smaller images or generate on demand)
