@@ -204,7 +204,7 @@ impl Tagger for OnnxTagger {
             .run(ort::inputs![input_name.as_str() => ort_tensor])
             .map_err(|e| anyhow::anyhow!("ONNX inference failed: {e}"))?;
 
-        if outputs.len() == 0 {
+        if outputs.is_empty() {
             anyhow::bail!("ONNX model produced no outputs");
         }
         let (_, scores) = outputs[0]
@@ -340,6 +340,93 @@ impl TaggerWorker {
     }
 }
 
+// ─── Model file helpers ───────────────────────────────────────────────────────
+
+/// Git LFS pointer files start with this header line.
+const LFS_POINTER_HEADER: &[u8] = b"version https://git-lfs.github.com/spec/v1";
+
+/// Return `true` if the first bytes of `path` look like a Git LFS pointer.
+fn is_lfs_pointer(path: &std::path::Path) -> bool {
+    use std::io::Read;
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut buf = vec![0u8; LFS_POINTER_HEADER.len()];
+    matches!(f.read_exact(&mut buf), Ok(())) && buf == LFS_POINTER_HEADER
+}
+
+/// Ensure that the file at `dest_path` exists and is a valid (non-LFS) file.
+///
+/// * If the file is missing or is a Git LFS pointer, and `url` is `Some`,
+///   it will be downloaded from `url` and written to `dest_path` (creating
+///   parent directories as needed).
+/// * If the file is a Git LFS pointer and no URL is provided, an error with a
+///   helpful message is returned so the user knows they need the real file.
+async fn ensure_model_file(
+    dest_path: &str,
+    url: Option<&str>,
+    http: &reqwest::Client,
+) -> Result<()> {
+    let path = std::path::Path::new(dest_path);
+
+    let needs_download = if !path.exists() {
+        tracing::info!(path = dest_path, "Model file not found; will download");
+        true
+    } else if is_lfs_pointer(path) {
+        tracing::warn!(
+            path = dest_path,
+            "Model file appears to be a Git LFS pointer (not the real binary); will re-download"
+        );
+        true
+    } else {
+        false
+    };
+
+    if !needs_download {
+        return Ok(());
+    }
+
+    let url = url.ok_or_else(|| {
+        anyhow::anyhow!(
+            "Model file '{}' is missing or is a Git LFS pointer, \
+             and no download URL is configured. \
+             Set WD14_MODEL_URL / WD14_LABELS_URL or place the files manually.",
+            dest_path
+        )
+    })?;
+
+    tracing::info!(url, dest = dest_path, "Downloading model file");
+
+    // Create parent directories if needed.
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create directory '{}'", parent.display()))?;
+    }
+
+    let response = http
+        .get(url)
+        .send()
+        .await
+        .with_context(|| format!("HTTP request failed for '{url}'"))?
+        .error_for_status()
+        .with_context(|| format!("HTTP error status for '{url}'"))?;
+
+    let bytes = response
+        .bytes()
+        .await
+        .with_context(|| format!("Failed to read response body from '{url}'"))?;
+
+    std::fs::write(path, &bytes)
+        .with_context(|| format!("Failed to write model file to '{dest_path}'"))?;
+
+    tracing::info!(
+        dest = dest_path,
+        bytes = bytes.len(),
+        "Model file downloaded successfully"
+    );
+    Ok(())
+}
+
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
 pub async fn run() -> Result<()> {
@@ -353,6 +440,23 @@ pub async fn run() -> Result<()> {
 
     let config = fulgorart_core::AppConfig::from_env()?;
     let db = fulgorart_db::Db::connect(&config.db_path).await?;
+
+    // Ensure the model and labels files are present (download if needed).
+    let http = reqwest::Client::new();
+    ensure_model_file(
+        &config.wd14_model_path,
+        config.wd14_model_url.as_deref(),
+        &http,
+    )
+    .await
+    .context("Failed to ensure WD14 model file")?;
+    ensure_model_file(
+        &config.wd14_labels_path,
+        config.wd14_labels_url.as_deref(),
+        &http,
+    )
+    .await
+    .context("Failed to ensure WD14 labels file")?;
 
     let tagger = OnnxTagger::new(
         &config.wd14_model_path,

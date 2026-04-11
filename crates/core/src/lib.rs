@@ -98,6 +98,10 @@ pub struct AppConfig {
     pub port: u16,
     pub wd14_model_path: String,
     pub wd14_labels_path: String,
+    /// Optional URL to download the ONNX model if not present locally.
+    pub wd14_model_url: Option<String>,
+    /// Optional URL to download the labels CSV if not present locally.
+    pub wd14_labels_url: Option<String>,
     pub wd14_general_threshold: f32,
     pub wd14_character_threshold: f32,
 }
@@ -121,9 +125,21 @@ impl AppConfig {
                 .and_then(|p| p.parse().ok())
                 .unwrap_or(3000),
             wd14_model_path: std::env::var("WD14_MODEL_PATH")
-                .unwrap_or_else(|_| "./models/wd14-convnext.onnx".to_string()),
+                .unwrap_or_else(|_| "./models/wd-swinv2.onnx".to_string()),
             wd14_labels_path: std::env::var("WD14_LABELS_PATH")
                 .unwrap_or_else(|_| "./models/selected_tags.csv".to_string()),
+            wd14_model_url: Some(
+                std::env::var("WD14_MODEL_URL").unwrap_or_else(|_| {
+                    "https://huggingface.co/SmilingWolf/wd-swinv2-tagger-v3/resolve/main/model.onnx"
+                        .to_string()
+                }),
+            ),
+            wd14_labels_url: Some(
+                std::env::var("WD14_LABELS_URL").unwrap_or_else(|_| {
+                    "https://huggingface.co/SmilingWolf/wd-swinv2-tagger-v3/resolve/main/selected_tags.csv"
+                        .to_string()
+                }),
+            ),
             wd14_general_threshold: std::env::var("WD14_GENERAL_THRESHOLD")
                 .ok()
                 .and_then(|v| v.parse().ok())
