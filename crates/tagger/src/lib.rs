@@ -411,7 +411,7 @@ impl CliTaggerWorker {
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
-pub async fn run() -> Result<()> {
+fn init() -> Result<(fulgorart_core::AppConfig, OnnxTagger)> {
     dotenvy::dotenv().ok();
 
     tracing_subscriber::fmt()
@@ -421,14 +421,18 @@ pub async fn run() -> Result<()> {
         .init();
 
     let config = fulgorart_core::AppConfig::from_env()?;
-    let db = fulgorart_db::Db::connect(&config.db_path).await?;
-
     let tagger = OnnxTagger::new(
         &config.wd14_model_path,
         &config.wd14_labels_path,
         config.wd14_general_threshold,
         config.wd14_character_threshold,
     )?;
+    Ok((config, tagger))
+}
+
+pub async fn run() -> Result<()> {
+    let (config, tagger) = init()?;
+    let db = fulgorart_db::Db::connect(&config.db_path).await?;
 
     let worker = TaggerWorker::new(db, Box::new(tagger));
     let n = worker.run_once().await?;
@@ -438,23 +442,8 @@ pub async fn run() -> Result<()> {
 }
 
 pub async fn run_for_image_ids(image_ids: &[i64]) -> Result<usize> {
-    dotenvy::dotenv().ok();
-
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .init();
-
-    let config = fulgorart_core::AppConfig::from_env()?;
+    let (config, tagger) = init()?;
     let db = fulgorart_db::Db::connect(&config.db_path).await?;
-
-    let tagger = OnnxTagger::new(
-        &config.wd14_model_path,
-        &config.wd14_labels_path,
-        config.wd14_general_threshold,
-        config.wd14_character_threshold,
-    )?;
 
     let worker = CliTaggerWorker::new(db, Box::new(tagger));
     let n = worker.run_image_ids(image_ids).await?;
@@ -500,22 +489,7 @@ impl CliPathTaggerWorker {
 }
 
 pub async fn run_for_paths(paths: &[String]) -> Result<usize> {
-    dotenvy::dotenv().ok();
-
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .init();
-
-    let config = fulgorart_core::AppConfig::from_env()?;
-
-    let tagger = OnnxTagger::new(
-        &config.wd14_model_path,
-        &config.wd14_labels_path,
-        config.wd14_general_threshold,
-        config.wd14_character_threshold,
-    )?;
+    let (_config, tagger) = init()?;
 
     let worker = CliPathTaggerWorker::new(Box::new(tagger));
     let n = worker.run_paths(paths).await?;
