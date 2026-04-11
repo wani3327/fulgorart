@@ -1,0 +1,23 @@
+[package]
+name = "fulgorart-ingestor"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+fulgorart-core = { path = "../core" }
+fulgorart-db = { path = "../db" }
+fulgorart-storage = { path = "../storage" }
+tokio = { workspace = true }
+dotenvy = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+async-trait = { workspace = true }
+reqwest = { version = "0.13", features = ["json", "stream"] }
+bytes = "1"
+chrono = { workspace = true }
+sha2 = "0.10"
+hex = "0.4"
