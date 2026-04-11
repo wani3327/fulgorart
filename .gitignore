@@ -1,5 +1,5 @@
 # Rust build artifacts
-/target/
+target/
 
 # Environment files
 .env
@@ -12,6 +12,7 @@
 
 # WD14 model files
 *.onnx
+*.csv
 
 # Editor / OS
 .DS_Store
@@ -20,3 +21,4 @@
 *.swp
 
 onnxruntime-linux-x64-1.24.4/
+examples/*.jpg

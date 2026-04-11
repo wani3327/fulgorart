@@ -132,10 +132,10 @@ impl OnnxTagger {
 
         // The first N rows where the name starts with "rating:" are the rating
         // pseudo-tags that have no useful threshold semantics.
-        let rating_count = all
+        let rating_count = 4; /* all
             .iter()
             .take_while(|e| e.name.starts_with("rating:"))
-            .count();
+            .count(); */
 
         Ok((all, rating_count))
     }
@@ -340,6 +340,75 @@ impl TaggerWorker {
     }
 }
 
+/// CLI-triggered worker: tags explicitly requested image IDs and exits.
+pub struct CliTaggerWorker {
+    pub db: fulgorart_db::Db,
+    pub tagger: Box<dyn Tagger>,
+    pub http: reqwest::Client,
+}
+
+impl CliTaggerWorker {
+    pub fn new(db: fulgorart_db::Db, tagger: Box<dyn Tagger>) -> Self {
+        CliTaggerWorker {
+            db,
+            tagger,
+            http: reqwest::Client::new(),
+        }
+    }
+
+    /// Process all given image IDs and return number of processed items.
+    pub async fn run_image_ids(&self, image_ids: &[i64]) -> Result<usize> {
+        let mut total = 0usize;
+        for image_id in image_ids {
+            self.process_image_id(*image_id).await?;
+            total += 1;
+        }
+        Ok(total)
+    }
+
+    async fn process_image_id(&self, image_id: i64) -> Result<()> {
+        let asset = self
+            .db
+            .get_image_asset_by_id(image_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("image not found: {}", image_id))?;
+
+        let predictions = self.download_and_tag(&asset).await?;
+        for pred in &predictions {
+            let tag = self
+                .db
+                .get_or_create_tag(&pred.name, pred.category.as_deref())
+                .await?;
+            self.db
+                .insert_image_tag(image_id, tag.id, "wd14", Some(pred.score as f64))
+                .await?;
+        }
+
+        tracing::info!(image_id, tags = predictions.len(), "Tagged image from CLI args");
+        Ok(())
+    }
+
+    async fn download_and_tag(
+        &self,
+        asset: &fulgorart_db::ImageAssetRow,
+    ) -> Result<Vec<TagPrediction>> {
+        tracing::debug!(url = %asset.r2_url, "Downloading image for tagging");
+        let response = self
+            .http
+            .get(&asset.r2_url)
+            .send()
+            .await
+            .context("HTTP request failed")?
+            .error_for_status()
+            .context("HTTP error status")?;
+        let bytes: Bytes = response
+            .bytes()
+            .await
+            .context("Failed to read image body")?;
+        self.tagger.tag_image(&bytes).await
+    }
+}
+
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
 pub async fn run() -> Result<()> {
@@ -366,4 +435,90 @@ pub async fn run() -> Result<()> {
     tracing::info!("Tagger: processed {} job(s)", n);
 
     Ok(())
+}
+
+pub async fn run_for_image_ids(image_ids: &[i64]) -> Result<usize> {
+    dotenvy::dotenv().ok();
+
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .init();
+
+    let config = fulgorart_core::AppConfig::from_env()?;
+    let db = fulgorart_db::Db::connect(&config.db_path).await?;
+
+    let tagger = OnnxTagger::new(
+        &config.wd14_model_path,
+        &config.wd14_labels_path,
+        config.wd14_general_threshold,
+        config.wd14_character_threshold,
+    )?;
+
+    let worker = CliTaggerWorker::new(db, Box::new(tagger));
+    let n = worker.run_image_ids(image_ids).await?;
+    tracing::info!("Tagger: processed {} image(s) from CLI", n);
+    Ok(n)
+}
+
+/// CLI-triggered worker: tags explicitly provided local file paths and exits.
+pub struct CliPathTaggerWorker {
+    pub tagger: Box<dyn Tagger>,
+}
+
+impl CliPathTaggerWorker {
+    pub fn new(tagger: Box<dyn Tagger>) -> Self {
+        CliPathTaggerWorker { tagger }
+    }
+
+    /// Process all given file paths and return number of processed files.
+    pub async fn run_paths(&self, paths: &[String]) -> Result<usize> {
+        let mut total = 0usize;
+        for path in paths {
+            let bytes = tokio::fs::read(path)
+                .await
+                .with_context(|| format!("Failed to read image file: {}", path))?;
+            let predictions = self.tagger.tag_image(&bytes).await?;
+
+            #[derive(Serialize)]
+            struct PathTagResult {
+                path: String,
+                tags: Vec<TagPrediction>,
+            }
+
+            let result = PathTagResult {
+                path: path.to_string(),
+                tags: predictions,
+            };
+
+            println!("{}", serde_json::to_string(&result)?);
+            total += 1;
+        }
+        Ok(total)
+    }
+}
+
+pub async fn run_for_paths(paths: &[String]) -> Result<usize> {
+    dotenvy::dotenv().ok();
+
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .init();
+
+    let config = fulgorart_core::AppConfig::from_env()?;
+
+    let tagger = OnnxTagger::new(
+        &config.wd14_model_path,
+        &config.wd14_labels_path,
+        config.wd14_general_threshold,
+        config.wd14_character_threshold,
+    )?;
+
+    let worker = CliPathTaggerWorker::new(Box::new(tagger));
+    let n = worker.run_paths(paths).await?;
+    tracing::info!("Tagger: processed {} local file(s) from CLI", n);
+    Ok(n)
 }
