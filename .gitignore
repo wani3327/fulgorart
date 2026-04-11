@@ -18,3 +18,5 @@
 .idea/
 .vscode/
 *.swp
+
+onnxruntime-linux-x64-1.24.4/

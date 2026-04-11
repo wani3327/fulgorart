@@ -11,7 +11,7 @@ Rust workspace with these crates:
 | `crates/core` | Shared types, enums, `AppConfig` |
 | `crates/db` | SQLite via `sqlx` — all DB queries |
 | `crates/storage` | Cloudflare R2 / S3 upload client |
-| `crates/tagger` | WD14 ONNX tagger worker (stub; `ort` integration TODO) |
+| `crates/tagger` | WD14 ONNX tagger worker (`fulgorart-tagger`) |
 | `crates/ingestor` | Pixiv & Twitter source adapters |
 | `crates/web` | Axum web application + REST API |
 | `bin/cli` | `fulgorart-cli` command-line tool |
@@ -42,11 +42,34 @@ FULGORART_PASSWORD=mysecret        # optional HTTP Basic Auth
 FULGORART_PORT=3000
 ```
 
-3. Build:
+3. Build the workspace:
 
 ```bash
 cargo build --release
 ```
+
+## Building the tagger binary
+
+The tagger is a separate release binary. Build it with:
+
+```bash
+cargo build --release -p fulgorart-tagger
+# or
+make build-tagger
+```
+
+The resulting executable is written to `target/release/fulgorart-tagger`.
+
+## Shipping to another computer
+
+The tagger is easiest to move as a small folder that contains the binary plus its runtime assets:
+
+1. Copy `target/release/fulgorart-tagger` to the destination machine.
+2. Copy the WD14 model files and point the binary at them with `WD14_MODEL_PATH` and `WD14_LABELS_PATH`, or place them at the default `./models/` paths.
+3. Make sure the ONNX Runtime shared library is available on the target machine. With the current `load-dynamic` setup, placing `libonnxruntime.so` next to the executable is the simplest option on Linux. On Windows and macOS, use the platform-appropriate library name in the same folder as the binary, or set `ORT_DYLIB_PATH` explicitly.
+4. Copy `.env` or set the required environment variables on the destination machine, especially `FULGORART_DB_PATH`, `FULGORART_R2_*`, and any tagger/model paths you need.
+
+If you want a repeatable handoff, build the binary with `make build-tagger`, then archive the executable together with the model directory and the ONNX Runtime library that the executable will load at startup.
 
 ## Running the web server
 
@@ -93,6 +116,7 @@ cargo run --bin fulgorart-cli -- add-tag --image-id 1 --tag "blue_hair"
 ```
 make check   # cargo check
 make build   # cargo build --release
+make build-tagger # cargo build --release -p fulgorart-tagger
 make test    # cargo test
 make fmt     # cargo fmt --all
 make lint    # cargo clippy

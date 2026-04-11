@@ -112,8 +112,7 @@ impl AppConfig {
                 .unwrap_or_else(|_| "fulgorart-images".to_string()),
             r2_endpoint: std::env::var("FULGORART_R2_ENDPOINT")
                 .unwrap_or_else(|_| "https://example.r2.cloudflarestorage.com".to_string()),
-            r2_access_key_id: std::env::var("FULGORART_R2_ACCESS_KEY_ID")
-                .unwrap_or_default(),
+            r2_access_key_id: std::env::var("FULGORART_R2_ACCESS_KEY_ID").unwrap_or_default(),
             r2_secret_access_key: std::env::var("FULGORART_R2_SECRET_ACCESS_KEY")
                 .unwrap_or_default(),
             password: std::env::var("FULGORART_PASSWORD").ok(),

@@ -44,9 +44,7 @@ enum Commands {
         per_page: i64,
     },
     /// Search tags
-    SearchTags {
-        query: String,
-    },
+    SearchTags { query: String },
     /// Add a tag to an image
     AddTag {
         #[arg(long)]
@@ -62,8 +60,7 @@ async fn main() -> Result<()> {
 
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "warn".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()),
         )
         .init();
 
@@ -180,7 +177,10 @@ async fn main() -> Result<()> {
             let tag_row = db.get_or_create_tag(&tag, None).await?;
             db.insert_image_tag(image_id, tag_row.id, "manual", None)
                 .await?;
-            println!("Added tag '{}' (id={}) to image {}", tag, tag_row.id, image_id);
+            println!(
+                "Added tag '{}' (id={}) to image {}",
+                tag, tag_row.id, image_id
+            );
         }
     }
 

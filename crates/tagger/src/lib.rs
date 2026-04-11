@@ -132,7 +132,10 @@ impl OnnxTagger {
 
         // The first N rows where the name starts with "rating:" are the rating
         // pseudo-tags that have no useful threshold semantics.
-        let rating_count = all.iter().take_while(|e| e.name.starts_with("rating:")).count();
+        let rating_count = all
+            .iter()
+            .take_while(|e| e.name.starts_with("rating:"))
+            .count();
 
         Ok((all, rating_count))
     }
@@ -142,8 +145,8 @@ impl OnnxTagger {
     fn preprocess(image_bytes: &[u8]) -> Result<Array4<f32>> {
         use image::{imageops, DynamicImage, Rgb, RgbImage};
 
-        let img: DynamicImage = image::load_from_memory(image_bytes)
-            .context("Failed to decode image")?;
+        let img: DynamicImage =
+            image::load_from_memory(image_bytes).context("Failed to decode image")?;
         let img = img.to_rgb8();
         let (w, h) = img.dimensions();
 
@@ -329,7 +332,10 @@ impl TaggerWorker {
             .context("HTTP request failed")?
             .error_for_status()
             .context("HTTP error status")?;
-        let bytes: Bytes = response.bytes().await.context("Failed to read image body")?;
+        let bytes: Bytes = response
+            .bytes()
+            .await
+            .context("Failed to read image body")?;
         self.tagger.tag_image(&bytes).await
     }
 }
@@ -341,8 +347,7 @@ pub async fn run() -> Result<()> {
 
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
@@ -362,4 +367,3 @@ pub async fn run() -> Result<()> {
 
     Ok(())
 }
-

@@ -153,9 +153,13 @@ impl Db {
         Ok(row)
     }
 
-    pub async fn get_post_by_source(&self, source_type: &str, source_post_id: &str) -> Result<Option<PostRow>> {
+    pub async fn get_post_by_source(
+        &self,
+        source_type: &str,
+        source_post_id: &str,
+    ) -> Result<Option<PostRow>> {
         let row = sqlx::query_as::<_, PostRow>(
-            "SELECT * FROM post WHERE source_type = ? AND source_post_id = ?"
+            "SELECT * FROM post WHERE source_type = ? AND source_post_id = ?",
         )
         .bind(source_type)
         .bind(source_post_id)
@@ -222,7 +226,7 @@ impl Db {
     pub async fn list_image_assets(&self, page: i64, per_page: i64) -> Result<Vec<ImageAssetRow>> {
         let offset = (page - 1) * per_page;
         let rows = sqlx::query_as::<_, ImageAssetRow>(
-            "SELECT * FROM image_asset ORDER BY created_at DESC LIMIT ? OFFSET ?"
+            "SELECT * FROM image_asset ORDER BY created_at DESC LIMIT ? OFFSET ?",
         )
         .bind(per_page)
         .bind(offset)
@@ -245,9 +249,7 @@ impl Db {
         }
 
         // Build dynamic query
-        let mut sql = String::from(
-            "SELECT DISTINCT ia.* FROM image_asset ia"
-        );
+        let mut sql = String::from("SELECT DISTINCT ia.* FROM image_asset ia");
 
         for (i, _) in include_tags.iter().enumerate() {
             sql.push_str(&format!(
@@ -261,9 +263,13 @@ impl Db {
                 " WHERE ia.id NOT IN (
                     SELECT image_id FROM image_tag it_ex
                     JOIN tag t_ex ON it_ex.tag_id = t_ex.id
-                    WHERE t_ex.name IN ("
+                    WHERE t_ex.name IN (",
             );
-            let placeholders = exclude_tags.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+            let placeholders = exclude_tags
+                .iter()
+                .map(|_| "?")
+                .collect::<Vec<_>>()
+                .join(", ");
             sql.push_str(&placeholders);
             sql.push_str("))");
         }
@@ -288,7 +294,7 @@ impl Db {
     pub async fn insert_tag(&self, name: &str, category: Option<&str>) -> Result<TagRow> {
         let result = sqlx::query(
             "INSERT INTO tag (name, category) VALUES (?, ?)
-             ON CONFLICT(name) DO UPDATE SET category = COALESCE(excluded.category, tag.category)"
+             ON CONFLICT(name) DO UPDATE SET category = COALESCE(excluded.category, tag.category)",
         )
         .bind(name)
         .bind(category)
@@ -327,7 +333,7 @@ impl Db {
     pub async fn search_tags(&self, query: &str) -> Result<Vec<TagRow>> {
         let pattern = format!("%{}%", query);
         let rows = sqlx::query_as::<_, TagRow>(
-            "SELECT * FROM tag WHERE name LIKE ? ORDER BY name LIMIT 50"
+            "SELECT * FROM tag WHERE name LIKE ? ORDER BY name LIMIT 50",
         )
         .bind(pattern)
         .fetch_all(&self.pool)
@@ -365,7 +371,7 @@ impl Db {
         let id = result.last_insert_rowid();
         let row = if id == 0 {
             sqlx::query_as::<_, ImageTagRow>(
-                "SELECT * FROM image_tag WHERE image_id = ? AND tag_id = ?"
+                "SELECT * FROM image_tag WHERE image_id = ? AND tag_id = ?",
             )
             .bind(image_id)
             .bind(tag_id)
@@ -394,7 +400,7 @@ impl Db {
             "SELECT t.* FROM tag t
              JOIN image_tag it ON t.id = it.tag_id
              WHERE it.image_id = ?
-             ORDER BY t.name"
+             ORDER BY t.name",
         )
         .bind(image_id)
         .fetch_all(&self.pool)
@@ -405,12 +411,10 @@ impl Db {
     // ---- TagJob ----
 
     pub async fn insert_tag_job(&self, image_id: i64) -> Result<TagJobRow> {
-        let result = sqlx::query(
-            "INSERT INTO tag_job (image_id, status) VALUES (?, 'pending')"
-        )
-        .bind(image_id)
-        .execute(&self.pool)
-        .await?;
+        let result = sqlx::query("INSERT INTO tag_job (image_id, status) VALUES (?, 'pending')")
+            .bind(image_id)
+            .execute(&self.pool)
+            .await?;
 
         let id = result.last_insert_rowid();
         sqlx::query_as::<_, TagJobRow>("SELECT * FROM tag_job WHERE id = ?")
@@ -422,7 +426,7 @@ impl Db {
 
     pub async fn get_pending_tag_jobs(&self, limit: i64) -> Result<Vec<TagJobRow>> {
         let rows = sqlx::query_as::<_, TagJobRow>(
-            "SELECT * FROM tag_job WHERE status = 'pending' ORDER BY created_at ASC LIMIT ?"
+            "SELECT * FROM tag_job WHERE status = 'pending' ORDER BY created_at ASC LIMIT ?",
         )
         .bind(limit)
         .fetch_all(&self.pool)
@@ -437,7 +441,7 @@ impl Db {
         error: Option<&str>,
     ) -> Result<()> {
         sqlx::query(
-            "UPDATE tag_job SET status = ?, error = ?, updated_at = datetime('now') WHERE id = ?"
+            "UPDATE tag_job SET status = ?, error = ?, updated_at = datetime('now') WHERE id = ?",
         )
         .bind(status)
         .bind(error)

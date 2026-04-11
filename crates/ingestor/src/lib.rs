@@ -155,7 +155,12 @@ impl IngestorService {
         let r2_url = self.r2.object_url(&self.config.r2_bucket, &key);
 
         self.r2
-            .upload(&self.config.r2_bucket, &key, image_bytes.clone(), content_type)
+            .upload(
+                &self.config.r2_bucket,
+                &key,
+                image_bytes.clone(),
+                content_type,
+            )
             .await?;
 
         let asset = self
@@ -211,8 +216,7 @@ pub async fn run() -> Result<()> {
 
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
