@@ -1,4 +1,4 @@
-.PHONY: build build-tagger check test run-web run-cli run-tagger run-ingestor
+.PHONY: build build-tagger check test run-web run-cli run-tagger run-ingestor run-bridge
 
 # Support: make run-tagger -- ./examples/eru.jpg
 # and:     make run-tagger ARGS="./examples/eru.jpg"
@@ -30,3 +30,6 @@ run-tagger:
 
 run-ingestor:
 	cargo run --bin fulgorart-ingestor
+
+run-bridge:
+	cargo run --bin fulgorart-bridge

@@ -79,6 +79,13 @@ pub struct SourceAccountRow {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TagJobWithUrl {
+    pub job_id: i64,
+    pub image_id: i64,
+    pub r2_url: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ImageAssetWithTags {
     #[serde(flatten)]
     pub asset: ImageAssetRow,
@@ -432,6 +439,31 @@ impl Db {
         .fetch_all(&self.pool)
         .await?;
         Ok(rows)
+    }
+
+    pub async fn get_pending_tag_jobs_with_urls(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<TagJobWithUrl>> {
+        let rows = sqlx::query_as::<_, (i64, i64, String)>(
+            "SELECT tj.id, tj.image_id, ia.r2_url
+             FROM tag_job tj
+             JOIN image_asset ia ON tj.image_id = ia.id
+             WHERE tj.status = 'pending'
+             ORDER BY tj.created_at ASC
+             LIMIT ?",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|(job_id, image_id, r2_url)| TagJobWithUrl {
+                job_id,
+                image_id,
+                r2_url,
+            })
+            .collect())
     }
 
     pub async fn update_tag_job_status(
