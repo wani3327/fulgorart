@@ -241,18 +241,18 @@ impl Tagger for OnnxTagger {
     }
 }
 
-// ─── TaggerWorker ─────────────────────────────────────────────────────────────
+// ─── DbTaggerWorker ───────────────────────────────────────────────────────────
 
 /// One-shot worker: drains all pending tag jobs from the database and exits.
-pub struct TaggerWorker {
+pub struct DbTaggerWorker {
     pub db: fulgorart_db::Db,
     pub tagger: Box<dyn Tagger>,
     pub http: reqwest::Client,
 }
 
-impl TaggerWorker {
+impl DbTaggerWorker {
     pub fn new(db: fulgorart_db::Db, tagger: Box<dyn Tagger>) -> Self {
-        TaggerWorker {
+        DbTaggerWorker {
             db,
             tagger,
             http: reqwest::Client::new(),
@@ -340,16 +340,18 @@ impl TaggerWorker {
     }
 }
 
-/// CLI-triggered worker: tags explicitly requested image IDs and exits.
-pub struct CliTaggerWorker {
+// ─── DbImageIdTaggerWorker ────────────────────────────────────────────────────
+
+/// CLI-triggered worker: tags explicitly requested DB image IDs and exits.
+pub struct DbImageIdTaggerWorker {
     pub db: fulgorart_db::Db,
     pub tagger: Box<dyn Tagger>,
     pub http: reqwest::Client,
 }
 
-impl CliTaggerWorker {
+impl DbImageIdTaggerWorker {
     pub fn new(db: fulgorart_db::Db, tagger: Box<dyn Tagger>) -> Self {
-        CliTaggerWorker {
+        DbImageIdTaggerWorker {
             db,
             tagger,
             http: reqwest::Client::new(),
@@ -384,7 +386,7 @@ impl CliTaggerWorker {
                 .await?;
         }
 
-        tracing::info!(image_id, tags = predictions.len(), "Tagged image from CLI args");
+        tracing::info!(image_id, tags = predictions.len(), "Tagged image from DB image ID");
         Ok(())
     }
 
@@ -434,7 +436,7 @@ pub async fn run() -> Result<()> {
     let (config, tagger) = init()?;
     let db = fulgorart_db::Db::connect(&config.db_path).await?;
 
-    let worker = TaggerWorker::new(db, Box::new(tagger));
+    let worker = DbTaggerWorker::new(db, Box::new(tagger));
     let n = worker.run_once().await?;
     tracing::info!("Tagger: processed {} job(s)", n);
 
@@ -445,20 +447,28 @@ pub async fn run_for_image_ids(image_ids: &[i64]) -> Result<usize> {
     let (config, tagger) = init()?;
     let db = fulgorart_db::Db::connect(&config.db_path).await?;
 
-    let worker = CliTaggerWorker::new(db, Box::new(tagger));
+    let worker = DbImageIdTaggerWorker::new(db, Box::new(tagger));
     let n = worker.run_image_ids(image_ids).await?;
-    tracing::info!("Tagger: processed {} image(s) from CLI", n);
+    tracing::info!("Tagger: processed {} image(s) from DB image IDs", n);
     Ok(n)
 }
 
+// ─── LocalPathTaggerWorker ────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct PathTagResult {
+    path: String,
+    tags: Vec<TagPrediction>,
+}
+
 /// CLI-triggered worker: tags explicitly provided local file paths and exits.
-pub struct CliPathTaggerWorker {
+pub struct LocalPathTaggerWorker {
     pub tagger: Box<dyn Tagger>,
 }
 
-impl CliPathTaggerWorker {
+impl LocalPathTaggerWorker {
     pub fn new(tagger: Box<dyn Tagger>) -> Self {
-        CliPathTaggerWorker { tagger }
+        LocalPathTaggerWorker { tagger }
     }
 
     /// Process all given file paths and return number of processed files.
@@ -469,12 +479,6 @@ impl CliPathTaggerWorker {
                 .await
                 .with_context(|| format!("Failed to read image file: {}", path))?;
             let predictions = self.tagger.tag_image(&bytes).await?;
-
-            #[derive(Serialize)]
-            struct PathTagResult {
-                path: String,
-                tags: Vec<TagPrediction>,
-            }
 
             let result = PathTagResult {
                 path: path.to_string(),
@@ -491,8 +495,71 @@ impl CliPathTaggerWorker {
 pub async fn run_for_paths(paths: &[String]) -> Result<usize> {
     let (_config, tagger) = init()?;
 
-    let worker = CliPathTaggerWorker::new(Box::new(tagger));
+    let worker = LocalPathTaggerWorker::new(Box::new(tagger));
     let n = worker.run_paths(paths).await?;
-    tracing::info!("Tagger: processed {} local file(s) from CLI", n);
+    tracing::info!("Tagger: processed {} local file(s)", n);
+    Ok(n)
+}
+
+// ─── UrlTaggerWorker ──────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct UrlTagResult {
+    url: String,
+    tags: Vec<TagPrediction>,
+}
+
+/// CLI-triggered worker: downloads images from URLs and tags them, then exits.
+pub struct UrlTaggerWorker {
+    pub tagger: Box<dyn Tagger>,
+    pub http: reqwest::Client,
+}
+
+impl UrlTaggerWorker {
+    pub fn new(tagger: Box<dyn Tagger>) -> Self {
+        UrlTaggerWorker {
+            tagger,
+            http: reqwest::Client::new(),
+        }
+    }
+
+    /// Download and tag all given URLs, returning the number processed.
+    pub async fn run_urls(&self, urls: &[String]) -> Result<usize> {
+        let mut total = 0usize;
+        for url in urls {
+            let bytes = self.download(url).await?;
+            let predictions = self.tagger.tag_image(&bytes).await?;
+
+            let result = UrlTagResult {
+                url: url.clone(),
+                tags: predictions,
+            };
+
+            println!("{}", serde_json::to_string(&result)?);
+            total += 1;
+        }
+        Ok(total)
+    }
+
+    async fn download(&self, url: &str) -> Result<Bytes> {
+        tracing::debug!(%url, "Downloading image from URL");
+        let response = self
+            .http
+            .get(url)
+            .send()
+            .await
+            .context("HTTP request failed")?
+            .error_for_status()
+            .context("HTTP error status")?;
+        response.bytes().await.context("Failed to read image body")
+    }
+}
+
+pub async fn run_for_urls(urls: &[String]) -> Result<usize> {
+    let (_config, tagger) = init()?;
+
+    let worker = UrlTaggerWorker::new(Box::new(tagger));
+    let n = worker.run_urls(urls).await?;
+    tracing::info!("Tagger: processed {} image(s) from URLs", n);
     Ok(n)
 }
