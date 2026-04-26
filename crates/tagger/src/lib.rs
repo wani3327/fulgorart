@@ -213,10 +213,16 @@ impl Tagger for OnnxTagger {
 
         let mut predictions = Vec::new();
         for (i, label) in self.labels.iter().enumerate() {
+            let score = *scores.get(i).unwrap_or(&0.0_f32);
             if i < self.rating_count {
+                // Always include all rating tags regardless of threshold.
+                predictions.push(TagPrediction {
+                    name: label.name.clone(),
+                    category: Some("rating".to_string()),
+                    score,
+                });
                 continue;
             }
-            let score = *scores.get(i).unwrap_or(&0.0_f32);
             let threshold = if label.category == CAT_CHARACTER {
                 self.character_threshold
             } else {
