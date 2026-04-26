@@ -455,6 +455,12 @@ pub async fn run_for_image_ids(image_ids: &[i64]) -> Result<usize> {
 
 // ─── LocalPathTaggerWorker ────────────────────────────────────────────────────
 
+#[derive(Serialize)]
+struct PathTagResult {
+    path: String,
+    tags: Vec<TagPrediction>,
+}
+
 /// CLI-triggered worker: tags explicitly provided local file paths and exits.
 pub struct LocalPathTaggerWorker {
     pub tagger: Box<dyn Tagger>,
@@ -473,12 +479,6 @@ impl LocalPathTaggerWorker {
                 .await
                 .with_context(|| format!("Failed to read image file: {}", path))?;
             let predictions = self.tagger.tag_image(&bytes).await?;
-
-            #[derive(Serialize)]
-            struct PathTagResult {
-                path: String,
-                tags: Vec<TagPrediction>,
-            }
 
             let result = PathTagResult {
                 path: path.to_string(),
@@ -503,6 +503,12 @@ pub async fn run_for_paths(paths: &[String]) -> Result<usize> {
 
 // ─── UrlTaggerWorker ──────────────────────────────────────────────────────────
 
+#[derive(Serialize)]
+struct UrlTagResult {
+    url: String,
+    tags: Vec<TagPrediction>,
+}
+
 /// CLI-triggered worker: downloads images from URLs and tags them, then exits.
 pub struct UrlTaggerWorker {
     pub tagger: Box<dyn Tagger>,
@@ -523,12 +529,6 @@ impl UrlTaggerWorker {
         for url in urls {
             let bytes = self.download(url).await?;
             let predictions = self.tagger.tag_image(&bytes).await?;
-
-            #[derive(Serialize)]
-            struct UrlTagResult {
-                url: String,
-                tags: Vec<TagPrediction>,
-            }
 
             let result = UrlTagResult {
                 url: url.clone(),
