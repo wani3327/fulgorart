@@ -42,7 +42,7 @@ impl LabelEntry {
             1 => "artist",
             4 => "character",
             5 => "meta",
-            9 => "copyright",
+            9 => "rating",
             _ => "general",
         }
     }
@@ -213,7 +213,7 @@ impl Tagger for OnnxTagger {
 
         let mut predictions = Vec::new();
         for (i, label) in self.labels.iter().enumerate() {
-            let score = *scores.get(i).unwrap_or(&0.0_f32);
+rati            let score = *scores.get(i).unwrap_or(&0.0_f32);
             if i < self.rating_count {
                 // Always include all rating tags regardless of threshold.
                 predictions.push(TagPrediction {
