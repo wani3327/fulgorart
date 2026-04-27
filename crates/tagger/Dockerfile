@@ -6,7 +6,6 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential \
         ca-certificates \
-        libsqlite3-dev \
         pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
@@ -22,7 +21,6 @@ FROM debian:bookworm-slim AS runtime
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
-        libsqlite3-0 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -38,7 +36,6 @@ RUN mkdir -p /app/data
 
 ENV ORT_DYLIB_PATH=/opt/onnxruntime/lib/libonnxruntime.so.1.24.4 \
     WD14_MODEL_PATH=/app/models/wd-swinv2.onnx \
-    WD14_LABELS_PATH=/app/models/selected_tags.csv \
-    FULGORART_DB_PATH=/app/data/fulgorart.db
+    WD14_LABELS_PATH=/app/models/selected_tags.csv
 
 ENTRYPOINT ["fulgorart-tagger"]

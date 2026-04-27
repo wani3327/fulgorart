@@ -1,4 +1,4 @@
-.PHONY: build build-tagger check test run-web run-cli run-tagger run-ingestor docker-build-tagger docker-run-tagger docker-run-tagger-persist docker-save-tagger docker-load-tagger
+.PHONY: build build-tagger check test run-web run-cli run-tagger run-ingestor run-bridge docker-build-tagger docker-run-tagger docker-run-tagger-persist docker-save-tagger docker-load-tagger
 
 TAGGER_IMAGE ?= fulgorart-tagger:latest
 TAGGER_SAVE_FILE ?= fulgorart-tagger.tar
@@ -33,6 +33,9 @@ run-tagger:
 
 run-ingestor:
 	cargo run --bin fulgorart-ingestor
+
+run-bridge:
+	cargo run --bin fulgorart-bridge
 
 docker-build-tagger:
 	docker build -f crates/tagger/Dockerfile -t $(TAGGER_IMAGE) .
