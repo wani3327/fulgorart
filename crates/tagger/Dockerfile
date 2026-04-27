@@ -12,7 +12,7 @@ RUN apt-get update \
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY models ./models
-COPY onnxruntime-linux-x64-1.24.4 ./onnxruntime-linux-x64-1.24.4
+COPY crates/tagger/onnxruntime-linux-x64-1.24.4 ./onnxruntime-linux-x64-1.24.4
 
 RUN cargo build --release --locked -p fulgorart-tagger
 
@@ -31,8 +31,8 @@ COPY --from=builder /app/onnxruntime-linux-x64-1.24.4/lib/libonnxruntime.so.1.24
 
 RUN mkdir -p /app/data
 
-RUN ln -s /opt/onnxruntime/lib/libonnxruntime.so.1.24.4 /opt/onnxruntime/lib/libonnxruntime.so.1 \
-    && ln -s /opt/onnxruntime/lib/libonnxruntime.so.1 /opt/onnxruntime/lib/libonnxruntime.so
+# RUN ln -s /opt/onnxruntime/lib/libonnxruntime.so.1.24.4 /opt/onnxruntime/lib/libonnxruntime.so.1 \
+#    && ln -s /opt/onnxruntime/lib/libonnxruntime.so.1 /opt/onnxruntime/lib/libonnxruntime.so
 
 ENV ORT_DYLIB_PATH=/opt/onnxruntime/lib/libonnxruntime.so.1.24.4 \
     WD14_MODEL_PATH=/app/models/wd-swinv2.onnx \
