@@ -261,6 +261,29 @@ pub trait Worker: Send + Sync {
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
+/// Private trait for workers that drain the database tag-job queue.
+/// Provides a shared `drain_queue` default method so the loop is written once.
+#[async_trait]
+trait DbQueueWorker: Send + Sync {
+    fn db(&self) -> &fulgorart_db::Db;
+    async fn process_job(&self, job: &fulgorart_db::TagJobRow) -> Result<()>;
+
+    async fn drain_queue(&self) -> Result<usize> {
+        let mut total = 0usize;
+        loop {
+            let jobs = self.db().get_pending_tag_jobs(50).await?;
+            if jobs.is_empty() {
+                break;
+            }
+            for job in &jobs {
+                self.process_job(job).await?;
+                total += 1;
+            }
+        }
+        Ok(total)
+    }
+}
+
 /// Download raw image bytes from an HTTP/HTTPS URL.
 async fn fetch_bytes_via_http(http: &reqwest::Client, url: &str) -> Result<Bytes> {
     tracing::debug!(%url, "Downloading image via HTTP");
@@ -310,6 +333,21 @@ impl DbTaggerWorker {
         }
     }
 
+    async fn fetch_and_tag(
+        &self,
+        asset: &fulgorart_db::ImageAssetRow,
+    ) -> Result<Vec<TagPrediction>> {
+        let bytes = fetch_bytes_via_http(&self.http, &asset.r2_url).await?;
+        self.tagger.tag_image(&bytes).await
+    }
+}
+
+#[async_trait]
+impl DbQueueWorker for DbTaggerWorker {
+    fn db(&self) -> &fulgorart_db::Db {
+        &self.db
+    }
+
     async fn process_job(&self, job: &fulgorart_db::TagJobRow) -> Result<()> {
         self.db
             .update_tag_job_status(job.id, "running", None)
@@ -345,32 +383,13 @@ impl DbTaggerWorker {
         }
         Ok(())
     }
-
-    async fn fetch_and_tag(
-        &self,
-        asset: &fulgorart_db::ImageAssetRow,
-    ) -> Result<Vec<TagPrediction>> {
-        let bytes = fetch_bytes_via_http(&self.http, &asset.r2_url).await?;
-        self.tagger.tag_image(&bytes).await
-    }
 }
 
 #[async_trait]
 impl Worker for DbTaggerWorker {
     /// Process every pending tag job and return the number of jobs handled.
     async fn run(&self) -> Result<usize> {
-        let mut total = 0usize;
-        loop {
-            let jobs = self.db.get_pending_tag_jobs(50).await?;
-            if jobs.is_empty() {
-                break;
-            }
-            for job in &jobs {
-                self.process_job(job).await?;
-                total += 1;
-            }
-        }
-        Ok(total)
+        self.drain_queue().await
     }
 }
 
@@ -401,6 +420,22 @@ impl R2TaggerWorker {
         }
     }
 
+    async fn fetch_and_tag(
+        &self,
+        asset: &fulgorart_db::ImageAssetRow,
+    ) -> Result<Vec<TagPrediction>> {
+        tracing::debug!(key = %asset.r2_key, bucket = %self.bucket, "Downloading image from R2");
+        let bytes = self.r2.download(&self.bucket, &asset.r2_key).await?;
+        self.tagger.tag_image(&bytes).await
+    }
+}
+
+#[async_trait]
+impl DbQueueWorker for R2TaggerWorker {
+    fn db(&self) -> &fulgorart_db::Db {
+        &self.db
+    }
+
     async fn process_job(&self, job: &fulgorart_db::TagJobRow) -> Result<()> {
         self.db
             .update_tag_job_status(job.id, "running", None)
@@ -436,33 +471,13 @@ impl R2TaggerWorker {
         }
         Ok(())
     }
-
-    async fn fetch_and_tag(
-        &self,
-        asset: &fulgorart_db::ImageAssetRow,
-    ) -> Result<Vec<TagPrediction>> {
-        tracing::debug!(key = %asset.r2_key, bucket = %self.bucket, "Downloading image from R2");
-        let bytes = self.r2.download(&self.bucket, &asset.r2_key).await?;
-        self.tagger.tag_image(&bytes).await
-    }
 }
 
 #[async_trait]
 impl Worker for R2TaggerWorker {
     /// Process every pending tag job and return the number of jobs handled.
     async fn run(&self) -> Result<usize> {
-        let mut total = 0usize;
-        loop {
-            let jobs = self.db.get_pending_tag_jobs(50).await?;
-            if jobs.is_empty() {
-                break;
-            }
-            for job in &jobs {
-                self.process_job(job).await?;
-                total += 1;
-            }
-        }
-        Ok(total)
+        self.drain_queue().await
     }
 }
 
