@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 fulgorart-core = { path = "../core" }
+fulgorart-storage = { path = "../storage" }
 tokio = { workspace = true }
 dotenvy = { workspace = true }
 serde = { workspace = true }
