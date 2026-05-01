@@ -1366,6 +1366,7 @@ dependencies = [
  "csv",
  "dotenvy",
  "fulgorart-core",
+ "fulgorart-storage",
  "image",
  "ndarray",
  "ort",

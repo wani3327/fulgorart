@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
+use fulgorart_storage::R2Client;
 use ndarray::Array4;
 use ort::{
     session::{builder::GraphOptimizationLevel, Session},
@@ -23,6 +24,16 @@ pub struct TagPrediction {
 #[async_trait]
 pub trait Tagger: Send + Sync {
     async fn tag_image(&self, image_bytes: &[u8]) -> Result<Vec<TagPrediction>>;
+}
+
+// ─── Worker trait ─────────────────────────────────────────────────────────────
+
+/// Common interface for all tagger workers.
+/// Each worker receives a list of string inputs (file paths, URLs, or R2 object
+/// keys) and returns the number of successfully processed items.
+#[async_trait]
+pub trait TaggerWorker: Send + Sync {
+    async fn run(&self, inputs: &[String]) -> Result<usize>;
 }
 
 // ─── Label entry loaded from selected_tags.csv ────────────────────────────────
@@ -285,11 +296,13 @@ impl LocalPathTaggerWorker {
     pub fn new(tagger: Box<dyn Tagger>) -> Self {
         LocalPathTaggerWorker { tagger }
     }
+}
 
-    /// Process all given file paths and return number of processed files.
-    pub async fn run_paths(&self, paths: &[String]) -> Result<usize> {
+#[async_trait]
+impl TaggerWorker for LocalPathTaggerWorker {
+    async fn run(&self, inputs: &[String]) -> Result<usize> {
         let mut total = 0usize;
-        for path in paths {
+        for path in inputs {
             let bytes = tokio::fs::read(path)
                 .await
                 .with_context(|| format!("Failed to read image file: {}", path))?;
@@ -311,7 +324,7 @@ pub async fn run_for_paths(paths: &[String]) -> Result<usize> {
     let tagger = init()?;
 
     let worker = LocalPathTaggerWorker::new(Box::new(tagger));
-    let n = worker.run_paths(paths).await?;
+    let n = worker.run(paths).await?;
     tracing::info!("Tagger: processed {} local file(s)", n);
     Ok(n)
 }
@@ -338,24 +351,6 @@ impl UrlTaggerWorker {
         }
     }
 
-    /// Download and tag all given URLs, returning the number processed.
-    pub async fn run_urls(&self, urls: &[String]) -> Result<usize> {
-        let mut total = 0usize;
-        for url in urls {
-            let bytes = self.download(url).await?;
-            let predictions = self.tagger.tag_image(&bytes).await?;
-
-            let result = UrlTagResult {
-                url: url.clone(),
-                tags: predictions,
-            };
-
-            println!("{}", serde_json::to_string(&result)?);
-            total += 1;
-        }
-        Ok(total)
-    }
-
     async fn download(&self, url: &str) -> Result<Bytes> {
         tracing::debug!(%url, "Downloading image from URL");
         let response = self
@@ -370,11 +365,90 @@ impl UrlTaggerWorker {
     }
 }
 
+#[async_trait]
+impl TaggerWorker for UrlTaggerWorker {
+    async fn run(&self, inputs: &[String]) -> Result<usize> {
+        let mut total = 0usize;
+        for url in inputs {
+            let bytes = self.download(url).await?;
+            let predictions = self.tagger.tag_image(&bytes).await?;
+
+            let result = UrlTagResult {
+                url: url.clone(),
+                tags: predictions,
+            };
+
+            println!("{}", serde_json::to_string(&result)?);
+            total += 1;
+        }
+        Ok(total)
+    }
+}
+
 pub async fn run_for_urls(urls: &[String]) -> Result<usize> {
     let tagger = init()?;
 
     let worker = UrlTaggerWorker::new(Box::new(tagger));
-    let n = worker.run_urls(urls).await?;
+    let n = worker.run(urls).await?;
     tracing::info!("Tagger: processed {} image(s) from URLs", n);
+    Ok(n)
+}
+
+// ─── R2TaggerWorker ───────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct R2TagResult {
+    key: String,
+    tags: Vec<TagPrediction>,
+}
+
+/// Worker that fetches images from a Cloudflare R2 bucket and tags them.
+///
+/// Each input string is an R2 object key (with an optional `r2://` prefix that
+/// will be stripped automatically).
+pub struct R2TaggerWorker {
+    pub tagger: Box<dyn Tagger>,
+    pub r2: R2Client,
+    pub bucket: String,
+}
+
+impl R2TaggerWorker {
+    pub fn new(tagger: Box<dyn Tagger>, r2: R2Client, bucket: String) -> Self {
+        R2TaggerWorker { tagger, r2, bucket }
+    }
+}
+
+#[async_trait]
+impl TaggerWorker for R2TaggerWorker {
+    async fn run(&self, inputs: &[String]) -> Result<usize> {
+        let mut total = 0usize;
+        for raw_key in inputs {
+            let key = raw_key.strip_prefix("r2://").unwrap_or(raw_key);
+            tracing::debug!(%key, bucket = %self.bucket, "Fetching image from R2");
+
+            let bytes = self.r2.download(&self.bucket, key).await?;
+            let predictions = self.tagger.tag_image(&bytes).await?;
+
+            let result = R2TagResult {
+                key: key.to_string(),
+                tags: predictions,
+            };
+
+            println!("{}", serde_json::to_string(&result)?);
+            total += 1;
+        }
+        Ok(total)
+    }
+}
+
+pub async fn run_for_r2_keys(keys: &[String]) -> Result<usize> {
+    let tagger = init()?;
+    let config = fulgorart_core::AppConfig::from_env()?;
+    let r2 = R2Client::new(&config).await?;
+    let bucket = config.r2_bucket.clone();
+
+    let worker = R2TaggerWorker::new(Box::new(tagger), r2, bucket);
+    let n = worker.run(keys).await?;
+    tracing::info!("Tagger: processed {} image(s) from R2", n);
     Ok(n)
 }

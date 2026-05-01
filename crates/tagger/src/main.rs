@@ -6,15 +6,22 @@ fn print_usage() {
     eprintln!("  fulgorart-tagger a.jpg b.png                  # process multiple local files");
     eprintln!("  fulgorart-tagger https://example.com/img.jpg  # download and tag an image URL");
     eprintln!("  fulgorart-tagger <url1> <url2>                # process multiple URLs");
+    eprintln!("  fulgorart-tagger r2://images/photo.jpg        # fetch from Cloudflare R2 bucket");
+    eprintln!("  fulgorart-tagger r2://<key1> r2://<key2>      # process multiple R2 object keys");
 }
 
 fn is_url(s: &str) -> bool {
     s.starts_with("http://") || s.starts_with("https://")
 }
 
+fn is_r2_key(s: &str) -> bool {
+    s.starts_with("r2://")
+}
+
 enum CliMode {
     LocalPaths(Vec<String>),
     Urls(Vec<String>),
+    R2Keys(Vec<String>),
 }
 
 fn parse_args() -> Result<CliMode> {
@@ -45,21 +52,23 @@ fn parse_args() -> Result<CliMode> {
         std::process::exit(1);
     }
 
-    // All arguments must be the same kind (all URLs or all local paths).
+    // All arguments must be the same kind (all URLs, all R2 keys, or all local paths).
     let all_urls = items.iter().all(|s| is_url(s));
-    let all_paths = items.iter().all(|s| !is_url(s));
+    let all_r2 = items.iter().all(|s| is_r2_key(s));
+    let all_paths = items.iter().all(|s| !is_url(s) && !is_r2_key(s));
 
-    if all_urls {
+    if all_r2 {
+        Ok(CliMode::R2Keys(items))
+    } else if all_urls {
         Ok(CliMode::Urls(items))
     } else if all_paths {
         Ok(CliMode::LocalPaths(items))
     } else {
-        anyhow::bail!("Cannot mix local file paths and URLs in the same invocation");
+        anyhow::bail!("Cannot mix local file paths, URLs, and R2 keys in the same invocation");
     }
 }
 
-/// Tag images provided as local file paths or URLs, then exit.
-/// Pass one or more URLs to tag remote images (Cloud Run Jobs args override mode).
+/// Tag images provided as local file paths, URLs, or Cloudflare R2 object keys, then exit.
 #[tokio::main]
 async fn main() -> Result<()> {
     match parse_args()? {
@@ -68,6 +77,9 @@ async fn main() -> Result<()> {
         }
         CliMode::Urls(urls) => {
             fulgorart_tagger::run_for_urls(&urls).await?;
+        }
+        CliMode::R2Keys(keys) => {
+            fulgorart_tagger::run_for_r2_keys(&keys).await?;
         }
     }
     Ok(())
