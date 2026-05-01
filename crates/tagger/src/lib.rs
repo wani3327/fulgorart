@@ -213,7 +213,7 @@ impl Tagger for OnnxTagger {
 
         let mut predictions = Vec::new();
         for (i, label) in self.labels.iter().enumerate() {
-rati            let score = *scores.get(i).unwrap_or(&0.0_f32);
+            let score = *scores.get(i).unwrap_or(&0.0_f32);
             if i < self.rating_count {
                 // Always include all rating tags regardless of threshold.
                 predictions.push(TagPrediction {
@@ -247,9 +247,54 @@ rati            let score = *scores.get(i).unwrap_or(&0.0_f32);
     }
 }
 
+// ─── Worker trait ─────────────────────────────────────────────────────────────
+
+/// Common interface for all tagger workers.
+///
+/// Each worker encapsulates its own input source (DB queue, R2 bucket, local
+/// paths, or URLs) and returns the number of images processed when `run` is
+/// called.
+#[async_trait]
+pub trait Worker: Send + Sync {
+    async fn run(&self) -> Result<usize>;
+}
+
+// ─── Shared helpers ───────────────────────────────────────────────────────────
+
+/// Download raw image bytes from an HTTP/HTTPS URL.
+async fn fetch_bytes_via_http(http: &reqwest::Client, url: &str) -> Result<Bytes> {
+    tracing::debug!(%url, "Downloading image via HTTP");
+    http.get(url)
+        .send()
+        .await
+        .context("HTTP request failed")?
+        .error_for_status()
+        .context("HTTP error status")?
+        .bytes()
+        .await
+        .context("Failed to read image body")
+}
+
+/// Write a set of tag predictions for a given image to the database.
+async fn persist_predictions(
+    db: &fulgorart_db::Db,
+    image_id: i64,
+    predictions: &[TagPrediction],
+) -> Result<()> {
+    for pred in predictions {
+        let tag = db
+            .get_or_create_tag(&pred.name, pred.category.as_deref())
+            .await?;
+        db.insert_image_tag(image_id, tag.id, "wd14", Some(pred.score as f64))
+            .await?;
+    }
+    Ok(())
+}
+
 // ─── DbTaggerWorker ───────────────────────────────────────────────────────────
 
-/// One-shot worker: drains all pending tag jobs from the database and exits.
+/// One-shot worker: drains all pending tag jobs from the database, downloads
+/// each image via its stored HTTP URL, and exits.
 pub struct DbTaggerWorker {
     pub db: fulgorart_db::Db,
     pub tagger: Box<dyn Tagger>,
@@ -263,22 +308,6 @@ impl DbTaggerWorker {
             tagger,
             http: reqwest::Client::new(),
         }
-    }
-
-    /// Process every pending tag job and return the number of jobs handled.
-    pub async fn run_once(&self) -> Result<usize> {
-        let mut total = 0usize;
-        loop {
-            let jobs = self.db.get_pending_tag_jobs(50).await?;
-            if jobs.is_empty() {
-                break;
-            }
-            for job in &jobs {
-                self.process_job(job).await?;
-                total += 1;
-            }
-        }
-        Ok(total)
     }
 
     async fn process_job(&self, job: &fulgorart_db::TagJobRow) -> Result<()> {
@@ -296,17 +325,9 @@ impl DbTaggerWorker {
             Some(a) => a,
         };
 
-        match self.download_and_tag(&asset).await {
+        match self.fetch_and_tag(&asset).await {
             Ok(predictions) => {
-                for pred in &predictions {
-                    let tag = self
-                        .db
-                        .get_or_create_tag(&pred.name, pred.category.as_deref())
-                        .await?;
-                    self.db
-                        .insert_image_tag(job.image_id, tag.id, "wd14", Some(pred.score as f64))
-                        .await?;
-                }
+                persist_predictions(&self.db, job.image_id, &predictions).await?;
                 tracing::info!(
                     image_id = job.image_id,
                     tags = predictions.len(),
@@ -325,24 +346,123 @@ impl DbTaggerWorker {
         Ok(())
     }
 
-    async fn download_and_tag(
+    async fn fetch_and_tag(
         &self,
         asset: &fulgorart_db::ImageAssetRow,
     ) -> Result<Vec<TagPrediction>> {
-        tracing::debug!(url = %asset.r2_url, "Downloading image for tagging");
-        let response = self
-            .http
-            .get(&asset.r2_url)
-            .send()
-            .await
-            .context("HTTP request failed")?
-            .error_for_status()
-            .context("HTTP error status")?;
-        let bytes: Bytes = response
-            .bytes()
-            .await
-            .context("Failed to read image body")?;
+        let bytes = fetch_bytes_via_http(&self.http, &asset.r2_url).await?;
         self.tagger.tag_image(&bytes).await
+    }
+}
+
+#[async_trait]
+impl Worker for DbTaggerWorker {
+    /// Process every pending tag job and return the number of jobs handled.
+    async fn run(&self) -> Result<usize> {
+        let mut total = 0usize;
+        loop {
+            let jobs = self.db.get_pending_tag_jobs(50).await?;
+            if jobs.is_empty() {
+                break;
+            }
+            for job in &jobs {
+                self.process_job(job).await?;
+                total += 1;
+            }
+        }
+        Ok(total)
+    }
+}
+
+// ─── R2TaggerWorker ───────────────────────────────────────────────────────────
+
+/// One-shot worker: drains all pending tag jobs from the database, fetches
+/// each image directly from the Cloudflare R2 bucket via the AWS S3 API, and
+/// exits.
+pub struct R2TaggerWorker {
+    pub db: fulgorart_db::Db,
+    pub tagger: Box<dyn Tagger>,
+    pub r2: fulgorart_storage::R2Client,
+    pub bucket: String,
+}
+
+impl R2TaggerWorker {
+    pub fn new(
+        db: fulgorart_db::Db,
+        tagger: Box<dyn Tagger>,
+        r2: fulgorart_storage::R2Client,
+        bucket: String,
+    ) -> Self {
+        R2TaggerWorker {
+            db,
+            tagger,
+            r2,
+            bucket,
+        }
+    }
+
+    async fn process_job(&self, job: &fulgorart_db::TagJobRow) -> Result<()> {
+        self.db
+            .update_tag_job_status(job.id, "running", None)
+            .await?;
+
+        let asset = match self.db.get_image_asset_by_id(job.image_id).await? {
+            None => {
+                self.db
+                    .update_tag_job_status(job.id, "failed", Some("image not found"))
+                    .await?;
+                return Ok(());
+            }
+            Some(a) => a,
+        };
+
+        match self.fetch_and_tag(&asset).await {
+            Ok(predictions) => {
+                persist_predictions(&self.db, job.image_id, &predictions).await?;
+                tracing::info!(
+                    image_id = job.image_id,
+                    tags = predictions.len(),
+                    "Tagged image"
+                );
+                self.db.update_tag_job_status(job.id, "done", None).await?;
+            }
+            Err(e) => {
+                let msg = format!("{e:#}");
+                tracing::error!(image_id = job.image_id, error = %msg, "Failed to tag image");
+                self.db
+                    .update_tag_job_status(job.id, "failed", Some(&msg))
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn fetch_and_tag(
+        &self,
+        asset: &fulgorart_db::ImageAssetRow,
+    ) -> Result<Vec<TagPrediction>> {
+        tracing::debug!(key = %asset.r2_key, bucket = %self.bucket, "Downloading image from R2");
+        let bytes = self.r2.download(&self.bucket, &asset.r2_key).await?;
+        self.tagger.tag_image(&bytes).await
+    }
+}
+
+#[async_trait]
+impl Worker for R2TaggerWorker {
+    /// Process every pending tag job and return the number of jobs handled.
+    async fn run(&self) -> Result<usize> {
+        let mut total = 0usize;
+        loop {
+            let jobs = self.db.get_pending_tag_jobs(50).await?;
+            if jobs.is_empty() {
+                break;
+            }
+            for job in &jobs {
+                self.process_job(job).await?;
+                total += 1;
+            }
+        }
+        Ok(total)
     }
 }
 
@@ -353,25 +473,17 @@ pub struct DbImageIdTaggerWorker {
     pub db: fulgorart_db::Db,
     pub tagger: Box<dyn Tagger>,
     pub http: reqwest::Client,
+    pub image_ids: Vec<i64>,
 }
 
 impl DbImageIdTaggerWorker {
-    pub fn new(db: fulgorart_db::Db, tagger: Box<dyn Tagger>) -> Self {
+    pub fn new(db: fulgorart_db::Db, tagger: Box<dyn Tagger>, image_ids: Vec<i64>) -> Self {
         DbImageIdTaggerWorker {
             db,
             tagger,
             http: reqwest::Client::new(),
+            image_ids,
         }
-    }
-
-    /// Process all given image IDs and return number of processed items.
-    pub async fn run_image_ids(&self, image_ids: &[i64]) -> Result<usize> {
-        let mut total = 0usize;
-        for image_id in image_ids {
-            self.process_image_id(*image_id).await?;
-            total += 1;
-        }
-        Ok(total)
     }
 
     async fn process_image_id(&self, image_id: i64) -> Result<()> {
@@ -381,39 +493,24 @@ impl DbImageIdTaggerWorker {
             .await?
             .ok_or_else(|| anyhow::anyhow!("image not found: {}", image_id))?;
 
-        let predictions = self.download_and_tag(&asset).await?;
-        for pred in &predictions {
-            let tag = self
-                .db
-                .get_or_create_tag(&pred.name, pred.category.as_deref())
-                .await?;
-            self.db
-                .insert_image_tag(image_id, tag.id, "wd14", Some(pred.score as f64))
-                .await?;
-        }
-
+        let bytes = fetch_bytes_via_http(&self.http, &asset.r2_url).await?;
+        let predictions = self.tagger.tag_image(&bytes).await?;
+        persist_predictions(&self.db, image_id, &predictions).await?;
         tracing::info!(image_id, tags = predictions.len(), "Tagged image from DB image ID");
         Ok(())
     }
+}
 
-    async fn download_and_tag(
-        &self,
-        asset: &fulgorart_db::ImageAssetRow,
-    ) -> Result<Vec<TagPrediction>> {
-        tracing::debug!(url = %asset.r2_url, "Downloading image for tagging");
-        let response = self
-            .http
-            .get(&asset.r2_url)
-            .send()
-            .await
-            .context("HTTP request failed")?
-            .error_for_status()
-            .context("HTTP error status")?;
-        let bytes: Bytes = response
-            .bytes()
-            .await
-            .context("Failed to read image body")?;
-        self.tagger.tag_image(&bytes).await
+#[async_trait]
+impl Worker for DbImageIdTaggerWorker {
+    /// Process all stored image IDs and return number of processed items.
+    async fn run(&self) -> Result<usize> {
+        let mut total = 0usize;
+        for &image_id in &self.image_ids {
+            self.process_image_id(image_id).await?;
+            total += 1;
+        }
+        Ok(total)
     }
 }
 
@@ -441,9 +538,10 @@ fn init() -> Result<(fulgorart_core::AppConfig, OnnxTagger)> {
 pub async fn run() -> Result<()> {
     let (config, tagger) = init()?;
     let db = fulgorart_db::Db::connect(&config.db_path).await?;
+    let r2 = fulgorart_storage::R2Client::new(&config).await?;
 
-    let worker = DbTaggerWorker::new(db, Box::new(tagger));
-    let n = worker.run_once().await?;
+    let worker = R2TaggerWorker::new(db, Box::new(tagger), r2, config.r2_bucket.clone());
+    let n = worker.run().await?;
     tracing::info!("Tagger: processed {} job(s)", n);
 
     Ok(())
@@ -453,8 +551,8 @@ pub async fn run_for_image_ids(image_ids: &[i64]) -> Result<usize> {
     let (config, tagger) = init()?;
     let db = fulgorart_db::Db::connect(&config.db_path).await?;
 
-    let worker = DbImageIdTaggerWorker::new(db, Box::new(tagger));
-    let n = worker.run_image_ids(image_ids).await?;
+    let worker = DbImageIdTaggerWorker::new(db, Box::new(tagger), image_ids.to_vec());
+    let n = worker.run().await?;
     tracing::info!("Tagger: processed {} image(s) from DB image IDs", n);
     Ok(n)
 }
@@ -470,17 +568,21 @@ struct PathTagResult {
 /// CLI-triggered worker: tags explicitly provided local file paths and exits.
 pub struct LocalPathTaggerWorker {
     pub tagger: Box<dyn Tagger>,
+    pub paths: Vec<String>,
 }
 
 impl LocalPathTaggerWorker {
-    pub fn new(tagger: Box<dyn Tagger>) -> Self {
-        LocalPathTaggerWorker { tagger }
+    pub fn new(tagger: Box<dyn Tagger>, paths: Vec<String>) -> Self {
+        LocalPathTaggerWorker { tagger, paths }
     }
+}
 
-    /// Process all given file paths and return number of processed files.
-    pub async fn run_paths(&self, paths: &[String]) -> Result<usize> {
+#[async_trait]
+impl Worker for LocalPathTaggerWorker {
+    /// Process all stored file paths and return number of processed files.
+    async fn run(&self) -> Result<usize> {
         let mut total = 0usize;
-        for path in paths {
+        for path in &self.paths {
             let bytes = tokio::fs::read(path)
                 .await
                 .with_context(|| format!("Failed to read image file: {}", path))?;
@@ -501,8 +603,8 @@ impl LocalPathTaggerWorker {
 pub async fn run_for_paths(paths: &[String]) -> Result<usize> {
     let (_config, tagger) = init()?;
 
-    let worker = LocalPathTaggerWorker::new(Box::new(tagger));
-    let n = worker.run_paths(paths).await?;
+    let worker = LocalPathTaggerWorker::new(Box::new(tagger), paths.to_vec());
+    let n = worker.run().await?;
     tracing::info!("Tagger: processed {} local file(s)", n);
     Ok(n)
 }
@@ -519,21 +621,26 @@ struct UrlTagResult {
 pub struct UrlTaggerWorker {
     pub tagger: Box<dyn Tagger>,
     pub http: reqwest::Client,
+    pub urls: Vec<String>,
 }
 
 impl UrlTaggerWorker {
-    pub fn new(tagger: Box<dyn Tagger>) -> Self {
+    pub fn new(tagger: Box<dyn Tagger>, urls: Vec<String>) -> Self {
         UrlTaggerWorker {
             tagger,
             http: reqwest::Client::new(),
+            urls,
         }
     }
+}
 
-    /// Download and tag all given URLs, returning the number processed.
-    pub async fn run_urls(&self, urls: &[String]) -> Result<usize> {
+#[async_trait]
+impl Worker for UrlTaggerWorker {
+    /// Download and tag all stored URLs, returning the number processed.
+    async fn run(&self) -> Result<usize> {
         let mut total = 0usize;
-        for url in urls {
-            let bytes = self.download(url).await?;
+        for url in &self.urls {
+            let bytes = fetch_bytes_via_http(&self.http, url).await?;
             let predictions = self.tagger.tag_image(&bytes).await?;
 
             let result = UrlTagResult {
@@ -546,26 +653,14 @@ impl UrlTaggerWorker {
         }
         Ok(total)
     }
-
-    async fn download(&self, url: &str) -> Result<Bytes> {
-        tracing::debug!(%url, "Downloading image from URL");
-        let response = self
-            .http
-            .get(url)
-            .send()
-            .await
-            .context("HTTP request failed")?
-            .error_for_status()
-            .context("HTTP error status")?;
-        response.bytes().await.context("Failed to read image body")
-    }
 }
 
 pub async fn run_for_urls(urls: &[String]) -> Result<usize> {
     let (_config, tagger) = init()?;
 
-    let worker = UrlTaggerWorker::new(Box::new(tagger));
-    let n = worker.run_urls(urls).await?;
+    let worker = UrlTaggerWorker::new(Box::new(tagger), urls.to_vec());
+    let n = worker.run().await?;
     tracing::info!("Tagger: processed {} image(s) from URLs", n);
     Ok(n)
 }
+

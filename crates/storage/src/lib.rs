@@ -53,6 +53,19 @@ impl R2Client {
         Ok(())
     }
 
+    #[instrument(skip(self))]
+    pub async fn download(&self, bucket: &str, key: &str) -> Result<bytes::Bytes> {
+        let output = self
+            .client
+            .get_object()
+            .bucket(bucket)
+            .key(key)
+            .send()
+            .await?;
+        let data = output.body.collect().await?;
+        Ok(data.into_bytes())
+    }
+
     pub fn object_url(&self, bucket: &str, key: &str) -> String {
         format!(
             "{}/{}/{}",

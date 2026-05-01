@@ -1350,6 +1350,7 @@ dependencies = [
  "dotenvy",
  "fulgorart-core",
  "fulgorart-db",
+ "fulgorart-storage",
  "image",
  "ndarray",
  "ort",
