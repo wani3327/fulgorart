@@ -1,13 +1,26 @@
-.PHONY: build build-tagger check test run-web run-cli run-tagger run-ingestor run-bridge docker-build-tagger docker-run-tagger docker-run-tagger-persist docker-save-tagger docker-load-tagger
+.PHONY: build build-tagger check test run-web run-cli run-tagger run-ingestor run-bridge docker-build-tagger docker-run-tagger docker-run-tagger-persist docker-tag-tagger docker-push-tagger docker-save-tagger docker-load-tagger
 
-TAGGER_IMAGE ?= fulgorart-tagger:latest
+TAGGER_IMAGE_NAME ?= fulgorart-tagger
+TAGGER_IMAGE_TAG ?= latest
+TAGGER_IMAGE ?= $(TAGGER_IMAGE_NAME):$(TAGGER_IMAGE_TAG)
 TAGGER_SAVE_FILE ?= fulgorart-tagger.tar
 
-# Support: make run-tagger -- ./examples/eru.jpg
-# and:     make run-tagger ARGS="./examples/eru.jpg"
-ifeq (run-tagger,$(firstword $(MAKECMDGOALS)))
-TAGGER_ARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
-$(eval $(TAGGER_ARGS):;@:)
+# Docker Hub push configuration.
+DOCKERHUB_USER ?=
+DOCKERHUB_IMAGE ?= $(DOCKERHUB_USER)/$(TAGGER_IMAGE_NAME):$(TAGGER_IMAGE_TAG)
+
+# Support positional args for these targets:
+#   make run-tagger -- ./examples/eru.jpg
+#   make docker-run-tagger -- https://example.com/a.jpg
+# Also supports ARGS="...".
+ARG_TARGETS := run-tagger docker-run-tagger docker-run-tagger-persist
+ifneq (,$(filter $(firstword $(MAKECMDGOALS)),$(ARG_TARGETS)))
+TARGET_ARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
+
+# Swallow extra command goals when passing positional args, including URLs.
+# Example: make docker-run-tagger https://example.com/a.jpg
+%:
+	@:
 endif
 
 build:
@@ -29,7 +42,7 @@ run-cli:
 	cargo run --bin fulgorart-cli -- --help
 
 run-tagger:
-	ORT_DYLIB_PATH=/home/ubuntu/fulgorart/onnxruntime-linux-x64-1.24.4/lib/libonnxruntime.so cargo run --bin fulgorart-tagger -- $(or $(ARGS),$(TAGGER_ARGS))
+	ORT_DYLIB_PATH=/home/ubuntu/fulgorart/onnxruntime-linux-x64-1.24.4/lib/libonnxruntime.so cargo run --bin fulgorart-tagger -- $(or $(ARGS),$(TARGET_ARGS))
 
 run-ingestor:
 	cargo run --bin fulgorart-ingestor
@@ -41,11 +54,18 @@ docker-build-tagger:
 	docker build -f crates/tagger/Dockerfile -t $(TAGGER_IMAGE) .
 
 docker-run-tagger:
-	docker run --rm $(TAGGER_IMAGE)
+	docker run --rm $(TAGGER_IMAGE) $(or $(ARGS),$(TARGET_ARGS))
 
 docker-run-tagger-persist:
 	mkdir -p data
-	docker run --rm -v "$$PWD/data:/app/data" $(TAGGER_IMAGE)
+	docker run --rm -v "$$PWD/data:/app/data" $(TAGGER_IMAGE) $(or $(ARGS),$(TARGET_ARGS))
+
+docker-tag-tagger:
+	@test -n "$(DOCKERHUB_USER)" || (echo "Set DOCKERHUB_USER=<dockerhub-username>" && exit 1)
+	docker tag $(TAGGER_IMAGE) $(DOCKERHUB_IMAGE)
+
+docker-push-tagger: docker-tag-tagger
+	docker push $(DOCKERHUB_IMAGE)
 
 docker-save-tagger:
 	docker save -o $(TAGGER_SAVE_FILE) $(TAGGER_IMAGE)

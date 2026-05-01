@@ -29,8 +29,6 @@ COPY --from=builder /app/target/release/fulgorart-tagger /usr/local/bin/fulgorar
 COPY --from=builder /app/models /app/models
 COPY --from=builder /app/onnxruntime-linux-x64-1.24.4/lib/libonnxruntime.so.1.24.4 /opt/onnxruntime/lib/libonnxruntime.so.1.24.4
 
-RUN mkdir -p /app/data
-
 # RUN ln -s /opt/onnxruntime/lib/libonnxruntime.so.1.24.4 /opt/onnxruntime/lib/libonnxruntime.so.1 \
 #    && ln -s /opt/onnxruntime/lib/libonnxruntime.so.1 /opt/onnxruntime/lib/libonnxruntime.so
 
