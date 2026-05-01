@@ -34,6 +34,29 @@ impl R2Client {
         })
     }
 
+    #[instrument(skip(self))]
+    pub async fn download(&self, bucket: &str, key: &str) -> Result<bytes::Bytes> {
+        let output = self
+            .client
+            .get_object()
+            .bucket(bucket)
+            .key(key)
+            .send()
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!("Failed to get object {key} from bucket {bucket}: {e}")
+            })?;
+
+        let data = output
+            .body
+            .collect()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to read object body for key {key}: {e}"))?
+            .into_bytes();
+
+        Ok(data)
+    }
+
     #[instrument(skip(self, data))]
     pub async fn upload(
         &self,
