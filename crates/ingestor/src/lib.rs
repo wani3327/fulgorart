@@ -192,7 +192,9 @@ impl PixivAdapter {
         }
 
         let mut dedup = HashSet::new();
-        urls.into_iter().filter(|u| dedup.insert(u.clone())).collect()
+        urls.into_iter()
+            .filter(|u| dedup.insert(u.clone()))
+            .collect()
     }
 }
 
@@ -221,7 +223,10 @@ impl SourceAdapter for PixivAdapter {
                 .await
                 .with_context(|| format!("Failed to parse Pixiv bookmarks response: {url}"))?;
 
-            let PixivBookmarksResponse { illusts, next_url: new_next_url } = response;
+            let PixivBookmarksResponse {
+                illusts,
+                next_url: new_next_url,
+            } = response;
 
             for illust in illusts {
                 let source_post_id = illust.id.to_string();
@@ -233,7 +238,12 @@ impl SourceAdapter for PixivAdapter {
                     .bookmark_date
                     .clone()
                     .or_else(|| illust.bookmark_data.as_ref().and_then(|d| d.date.clone()))
-                    .or_else(|| illust.bookmark_data.as_ref().and_then(|d| d.created_at.clone()))
+                    .or_else(|| {
+                        illust
+                            .bookmark_data
+                            .as_ref()
+                            .and_then(|d| d.created_at.clone())
+                    })
                     .or_else(|| illust.create_date.clone());
                 if !Self::is_since_included(since_ts.as_ref(), liked_at.as_deref()) {
                     continue;
