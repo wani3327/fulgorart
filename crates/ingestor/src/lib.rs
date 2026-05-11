@@ -201,7 +201,7 @@ impl IngestorService {
                     post.raw_json.as_deref(),
                 )
                 .await?;
-            let group_row = self.db.insert_image_group(post_row.id).await?;
+            let group_row = self.db.insert_image_group(Some(post_row.id)).await?;
 
             for image_url in &post.image_urls {
                 let (data, content_type) = adapter.download_image(image_url).await?;

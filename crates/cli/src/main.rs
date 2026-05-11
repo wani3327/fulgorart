@@ -124,7 +124,7 @@ async fn main() -> Result<()> {
                     None,
                 )
                 .await?;
-            let group = db.insert_image_group(post.id).await?;
+            let group = db.insert_image_group(Some(post.id)).await?;
 
             let asset = db
                 .insert_image_asset(

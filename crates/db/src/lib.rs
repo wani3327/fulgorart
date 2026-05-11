@@ -82,7 +82,7 @@ pub struct SourceAccountRow {
 #[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize)]
 pub struct ImageGroupRow {
     pub id: i64,
-    pub post_id: i64,
+    pub post_id: Option<i64>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -186,21 +186,36 @@ impl Db {
 
     // ---- ImageAsset ----
 
-    pub async fn insert_image_group(&self, post_id: i64) -> Result<ImageGroupRow> {
-        sqlx::query(
-            "INSERT INTO image_group (post_id) VALUES (?)
-             ON CONFLICT(post_id) DO UPDATE SET
-               updated_at = datetime('now')",
-        )
-        .bind(post_id)
-        .execute(&self.pool)
-        .await?;
+    pub async fn insert_image_group(&self, post_id: Option<i64>) -> Result<ImageGroupRow> {
+        match post_id {
+            Some(post_id) => {
+                sqlx::query(
+                    "INSERT INTO image_group (post_id) VALUES (?)
+                     ON CONFLICT(post_id) DO UPDATE SET
+                       updated_at = datetime('now')",
+                )
+                .bind(post_id)
+                .execute(&self.pool)
+                .await?;
 
-        sqlx::query_as::<_, ImageGroupRow>("SELECT * FROM image_group WHERE post_id = ?")
-            .bind(post_id)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(Into::into)
+                sqlx::query_as::<_, ImageGroupRow>("SELECT * FROM image_group WHERE post_id = ?")
+                    .bind(post_id)
+                    .fetch_one(&self.pool)
+                    .await
+                    .map_err(Into::into)
+            }
+            None => {
+                let result = sqlx::query("INSERT INTO image_group (post_id) VALUES (NULL)")
+                    .execute(&self.pool)
+                    .await?;
+
+                sqlx::query_as::<_, ImageGroupRow>("SELECT * FROM image_group WHERE id = ?")
+                    .bind(result.last_insert_rowid())
+                    .fetch_one(&self.pool)
+                    .await
+                    .map_err(Into::into)
+            }
+        }
     }
 
     pub async fn insert_image_asset(

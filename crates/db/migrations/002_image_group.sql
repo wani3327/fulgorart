@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS image_group (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    post_id INTEGER NOT NULL REFERENCES post(id) ON DELETE CASCADE,
+    post_id INTEGER REFERENCES post(id) ON DELETE CASCADE,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(post_id)
