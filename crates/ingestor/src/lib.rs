@@ -74,7 +74,8 @@ struct PixivIllust {
     user: Option<PixivUser>,
     create_date: Option<String>,
     bookmark_date: Option<String>,
-    bookmark_data: Option<PixivBookmarkData>,
+    #[serde(rename = "bookmark_data")]
+    bookmark_metadata: Option<PixivBookmarkData>,
     meta_single_page: Option<PixivMetaSinglePage>,
     #[serde(default)]
     meta_pages: Vec<PixivMetaPage>,
@@ -191,10 +192,29 @@ impl PixivAdapter {
             }
         }
 
-        let mut dedup = HashSet::new();
+        let mut seen_urls = HashSet::new();
         urls.into_iter()
-            .filter(|u| dedup.insert(u.clone()))
+            .filter(|url| seen_urls.insert(url.clone()))
             .collect()
+    }
+
+    fn extract_liked_at(illust: &PixivIllust) -> Option<String> {
+        illust
+            .bookmark_date
+            .clone()
+            .or_else(|| {
+                illust
+                    .bookmark_metadata
+                    .as_ref()
+                    .and_then(|data| data.date.clone())
+            })
+            .or_else(|| {
+                illust
+                    .bookmark_metadata
+                    .as_ref()
+                    .and_then(|data| data.created_at.clone())
+            })
+            .or_else(|| illust.create_date.clone())
     }
 }
 
@@ -234,17 +254,7 @@ impl SourceAdapter for PixivAdapter {
                     continue;
                 }
 
-                let liked_at = illust
-                    .bookmark_date
-                    .clone()
-                    .or_else(|| illust.bookmark_data.as_ref().and_then(|d| d.date.clone()))
-                    .or_else(|| {
-                        illust
-                            .bookmark_data
-                            .as_ref()
-                            .and_then(|d| d.created_at.clone())
-                    })
-                    .or_else(|| illust.create_date.clone());
+                let liked_at = Self::extract_liked_at(&illust);
                 if !Self::is_since_included(since_ts.as_ref(), liked_at.as_deref()) {
                     continue;
                 }
