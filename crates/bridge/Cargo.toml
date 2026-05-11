@@ -19,3 +19,4 @@ tracing-subscriber = { workspace = true }
 dotenvy = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 gcp_auth = "0.12"
+rustls = "0.23"

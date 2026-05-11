@@ -44,7 +44,7 @@ impl R2Client {
             .send()
             .await
             .map_err(|e| {
-                anyhow::anyhow!("Failed to get object {key} from bucket {bucket}: {e}")
+                anyhow::anyhow!("Failed to get object {key} from bucket {bucket}: {e:?}")
             })?;
 
         let data = output

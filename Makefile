@@ -42,7 +42,7 @@ run-cli:
 	cargo run --bin fulgorart-cli -- --help
 
 run-tagger:
-	ORT_DYLIB_PATH=/home/ubuntu/fulgorart/onnxruntime-linux-x64-1.24.4/lib/libonnxruntime.so cargo run --bin fulgorart-tagger -- $(or $(ARGS),$(TARGET_ARGS))
+	ORT_DYLIB_PATH=/home/ubuntu/fulgorart/crates/tagger/onnxruntime-linux-x64-1.24.4/lib/libonnxruntime.so cargo run --bin fulgorart-tagger -- $(or $(ARGS),$(TARGET_ARGS))
 
 run-ingestor:
 	cargo run --bin fulgorart-ingestor
@@ -54,11 +54,11 @@ docker-build-tagger:
 	docker build -f crates/tagger/Dockerfile -t $(TAGGER_IMAGE) .
 
 docker-run-tagger:
-	docker run --rm $(TAGGER_IMAGE) $(or $(ARGS),$(TARGET_ARGS))
+	docker run --rm --env-file .env $(TAGGER_IMAGE) $(or $(ARGS),$(TARGET_ARGS))
 
 docker-run-tagger-persist:
 	mkdir -p data
-	docker run --rm -v "$$PWD/data:/app/data" $(TAGGER_IMAGE) $(or $(ARGS),$(TARGET_ARGS))
+	docker run --rm --env-file .env -v "$$PWD/data:/app/data" $(TAGGER_IMAGE) $(or $(ARGS),$(TARGET_ARGS))
 
 docker-tag-tagger:
 	@test -n "$(DOCKERHUB_USER)" || (echo "Set DOCKERHUB_USER=<dockerhub-username>" && exit 1)
