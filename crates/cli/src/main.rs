@@ -124,10 +124,12 @@ async fn main() -> Result<()> {
                     None,
                 )
                 .await?;
+            let group = db.insert_image_group(Some(post.id)).await?;
 
             let asset = db
                 .insert_image_asset(
                     Some(post.id),
+                    Some(group.id),
                     &sha256,
                     &key,
                     &r2_url,

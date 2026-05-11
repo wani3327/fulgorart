@@ -133,6 +133,7 @@ impl IngestorService {
         &self,
         adapter: &dyn SourceAdapter,
         post_id: i64,
+        group_id: i64,
         image_bytes: Bytes,
         content_type: &str,
         source_url: &str,
@@ -167,6 +168,7 @@ impl IngestorService {
             .db
             .insert_image_asset(
                 Some(post_id),
+                Some(group_id),
                 &sha256,
                 &key,
                 &r2_url,
@@ -199,11 +201,19 @@ impl IngestorService {
                     post.raw_json.as_deref(),
                 )
                 .await?;
+            let group_row = self.db.insert_image_group(Some(post_row.id)).await?;
 
             for image_url in &post.image_urls {
                 let (data, content_type) = adapter.download_image(image_url).await?;
-                self.ingest_image(adapter, post_row.id, data, &content_type, image_url)
-                    .await?;
+                self.ingest_image(
+                    adapter,
+                    post_row.id,
+                    group_row.id,
+                    data,
+                    &content_type,
+                    image_url,
+                )
+                .await?;
                 count += 1;
             }
         }

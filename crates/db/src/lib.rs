@@ -25,6 +25,7 @@ pub struct PostRow {
 pub struct ImageAssetRow {
     pub id: i64,
     pub post_id: Option<i64>,
+    pub group_id: Option<i64>,
     pub sha256: String,
     pub r2_key: String,
     pub r2_url: String,
@@ -74,6 +75,14 @@ pub struct SourceAccountRow {
     pub access_token: Option<String>,
     pub refresh_token: Option<String>,
     pub token_expires_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize)]
+pub struct ImageGroupRow {
+    pub id: i64,
+    pub post_id: Option<i64>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -177,9 +186,42 @@ impl Db {
 
     // ---- ImageAsset ----
 
+    pub async fn insert_image_group(&self, post_id: Option<i64>) -> Result<ImageGroupRow> {
+        match post_id {
+            Some(post_id) => {
+                sqlx::query(
+                    "INSERT INTO image_group (post_id) VALUES (?)
+                     ON CONFLICT(post_id) DO UPDATE SET
+                       updated_at = datetime('now')",
+                )
+                .bind(post_id)
+                .execute(&self.pool)
+                .await?;
+
+                sqlx::query_as::<_, ImageGroupRow>("SELECT * FROM image_group WHERE post_id = ?")
+                    .bind(post_id)
+                    .fetch_one(&self.pool)
+                    .await
+                    .map_err(Into::into)
+            }
+            None => {
+                let result = sqlx::query("INSERT INTO image_group (post_id) VALUES (NULL)")
+                    .execute(&self.pool)
+                    .await?;
+
+                sqlx::query_as::<_, ImageGroupRow>("SELECT * FROM image_group WHERE id = ?")
+                    .bind(result.last_insert_rowid())
+                    .fetch_one(&self.pool)
+                    .await
+                    .map_err(Into::into)
+            }
+        }
+    }
+
     pub async fn insert_image_asset(
         &self,
         post_id: Option<i64>,
+        group_id: Option<i64>,
         sha256: &str,
         r2_key: &str,
         r2_url: &str,
@@ -189,14 +231,16 @@ impl Db {
         content_type: &str,
         source_url: Option<&str>,
     ) -> Result<ImageAssetRow> {
-        let result = sqlx::query(
-            "INSERT INTO image_asset (post_id, sha256, r2_key, r2_url, width, height, file_size, content_type, source_url)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        sqlx::query(
+            "INSERT INTO image_asset (post_id, group_id, sha256, r2_key, r2_url, width, height, file_size, content_type, source_url)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(sha256) DO UPDATE SET
-               r2_url = excluded.r2_url,
-               updated_at = datetime('now')"
+                r2_url = excluded.r2_url,
+                group_id = COALESCE(image_asset.group_id, excluded.group_id),
+                updated_at = datetime('now')"
         )
         .bind(post_id)
+        .bind(group_id)
         .bind(sha256)
         .bind(r2_key)
         .bind(r2_url)
@@ -208,18 +252,11 @@ impl Db {
         .execute(&self.pool)
         .await?;
 
-        let id = result.last_insert_rowid();
-        if id == 0 {
-            sqlx::query_as::<_, ImageAssetRow>("SELECT * FROM image_asset WHERE sha256 = ?")
-                .bind(sha256)
-                .fetch_one(&self.pool)
-                .await
-                .map_err(Into::into)
-        } else {
-            self.get_image_asset_by_id(id)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("ImageAsset not found after insert"))
-        }
+        sqlx::query_as::<_, ImageAssetRow>("SELECT * FROM image_asset WHERE sha256 = ?")
+            .bind(sha256)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(Into::into)
     }
 
     pub async fn get_image_asset_by_id(&self, id: i64) -> Result<Option<ImageAssetRow>> {
