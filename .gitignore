@@ -4,6 +4,7 @@ target/
 # Environment files
 .env
 .env.local
+development-493004-1f72f74562c7.json
 
 # SQLite database files
 *.db
