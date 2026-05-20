@@ -32,7 +32,7 @@ fn parse_args() -> Result<CliMode> {
     }
 
     let mut items: Vec<String> = Vec::new();
-    while let Some(arg) = args.next() {
+    for arg in args {
         match arg.as_str() {
             "-h" | "--help" => {
                 print_usage();

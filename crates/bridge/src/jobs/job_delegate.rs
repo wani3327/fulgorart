@@ -238,7 +238,7 @@ impl CloudRunJobDelegate {
         let filter = format!(
             "resource.type=\"cloud_run_job\" labels.\"run.googleapis.com/execution_name\"=\"{execution_id}\""
         );
-        let mut page_token = None;
+        let mut page_token: Option<String> = None;
         let mut results = Vec::new();
 
         loop {
