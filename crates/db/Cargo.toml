@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-fulgorart-core = { path = "../core" }
 sqlx = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
@@ -13,3 +12,4 @@ thiserror = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
+dotenvy = { workspace = true }

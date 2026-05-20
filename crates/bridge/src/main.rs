@@ -18,6 +18,5 @@ async fn main() -> Result<()> {
     let config = fulgorart_bridge::BridgeConfig::from_env()?;
     let service = fulgorart_bridge::BridgeService::new(config).await?;
     service.run_once().await?;
-
     Ok(())
 }

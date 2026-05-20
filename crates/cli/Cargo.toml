@@ -8,7 +8,6 @@ name = "fulgorart-cli"
 path = "src/main.rs"
 
 [dependencies]
-fulgorart-core = { path = "../core" }
 fulgorart-db = { path = "../db" }
 fulgorart-storage = { path = "../storage" }
 clap = { version = "4", features = ["derive"] }

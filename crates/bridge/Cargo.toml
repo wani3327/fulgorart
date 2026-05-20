@@ -9,7 +9,8 @@ path = "src/main.rs"
 
 [dependencies]
 fulgorart-db = { path = "../db" }
-fulgorart-core = { path = "../core" }
+fulgorart-ingestor = { path = "../ingestor" }
+fulgorart-storage = { path = "../storage" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -17,6 +18,9 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 dotenvy = { workspace = true }
+async-trait = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 gcp_auth = "0.12"
 rustls = "0.23"
+sha2 = "0.10"
+hex = "0.4"

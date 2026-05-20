@@ -1,7 +1,11 @@
+mod config;
+
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
 use fulgorart_storage::R2Client;
+
+pub use config::TaggerConfig;
 use ndarray::Array4;
 use ort::{
     session::{builder::GraphOptimizationLevel, Session},
@@ -144,9 +148,9 @@ impl OnnxTagger {
         // The first N rows where the name starts with "rating:" are the rating
         // pseudo-tags that have no useful threshold semantics.
         let rating_count = 4; /* all
-            .iter()
-            .take_while(|e| e.name.starts_with("rating:"))
-            .count(); */
+                              .iter()
+                              .take_while(|e| e.name.starts_with("rating:"))
+                              .count(); */
 
         Ok((all, rating_count))
     }
@@ -261,20 +265,19 @@ impl Tagger for OnnxTagger {
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
 fn init() -> Result<OnnxTagger> {
-    dotenvy::dotenv().ok();
-
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
-        .init();
+        .try_init()
+        .ok();
 
-    let config = fulgorart_core::AppConfig::from_env()?;
+    let config = config::TaggerConfig::from_env();
     let tagger = OnnxTagger::new(
-        &config.wd14_model_path,
-        &config.wd14_labels_path,
-        config.wd14_general_threshold,
-        config.wd14_character_threshold,
+        &config.model_path,
+        &config.labels_path,
+        config.general_threshold,
+        config.character_threshold,
     )?;
     Ok(tagger)
 }
@@ -426,7 +429,7 @@ impl TaggerWorker for R2TaggerWorker {
             let key = raw_key.strip_prefix("r2://").unwrap_or(raw_key);
             tracing::debug!(%key, bucket = %self.bucket, "Fetching image from R2");
 
-            let bytes = self.r2.download(&self.bucket, key).await?;
+            let bytes = self.r2.download(key).await?;
             let predictions = self.tagger.tag_image(&bytes).await?;
 
             let result = R2TagResult {
@@ -443,9 +446,9 @@ impl TaggerWorker for R2TaggerWorker {
 
 pub async fn run_for_r2_keys(keys: &[String]) -> Result<usize> {
     let tagger = init()?;
-    let config = fulgorart_core::AppConfig::from_env()?;
-    let r2 = R2Client::new(&config).await?;
-    let bucket = config.r2_bucket.clone();
+    let r2_config = config::r2_config_from_env()?;
+    let r2 = R2Client::new(&r2_config).await?;
+    let bucket = r2.bucket().to_string();
 
     let worker = R2TaggerWorker::new(Box::new(tagger), r2, bucket);
     let n = worker.run(keys).await?;

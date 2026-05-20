@@ -1,4 +1,20 @@
 use anyhow::Result;
+
+#[derive(Debug, Clone)]
+pub struct DbConfig {
+    pub path: String,
+}
+
+impl DbConfig {
+    pub fn from_env() -> Self {
+        dotenvy::dotenv().ok();
+        Self {
+            path: std::env::var("FULGORART_DB_PATH")
+                .unwrap_or_else(|_| "./data/fulgorart.db".to_string()),
+        }
+    }
+}
+
 use sqlx::SqlitePool;
 use tracing::instrument;
 
@@ -88,10 +104,10 @@ pub struct ImageGroupRow {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct TagJobWithUrl {
+pub struct TagJobWithKey {
     pub job_id: i64,
     pub image_id: i64,
-    pub r2_url: String,
+    pub r2_key: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -478,12 +494,23 @@ impl Db {
         Ok(rows)
     }
 
-    pub async fn get_pending_tag_jobs_with_urls(
-        &self,
-        limit: i64,
-    ) -> Result<Vec<TagJobWithUrl>> {
+    pub async fn ensure_tag_job(&self, image_id: i64) -> Result<TagJobRow> {
+        if let Some(existing) = sqlx::query_as::<_, TagJobRow>(
+            "SELECT * FROM tag_job WHERE image_id = ? ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(image_id)
+        .fetch_optional(&self.pool)
+        .await?
+        {
+            return Ok(existing);
+        }
+
+        self.insert_tag_job(image_id).await
+    }
+
+    pub async fn get_pending_tag_jobs_with_keys(&self, limit: i64) -> Result<Vec<TagJobWithKey>> {
         let rows = sqlx::query_as::<_, (i64, i64, String)>(
-            "SELECT tj.id, tj.image_id, ia.r2_url
+            "SELECT tj.id, tj.image_id, ia.r2_key
              FROM tag_job tj
              JOIN image_asset ia ON tj.image_id = ia.id
              WHERE tj.status = 'pending'
@@ -495,10 +522,10 @@ impl Db {
         .await?;
         Ok(rows
             .into_iter()
-            .map(|(job_id, image_id, r2_url)| TagJobWithUrl {
+            .map(|(job_id, image_id, r2_key)| TagJobWithKey {
                 job_id,
                 image_id,
-                r2_url,
+                r2_key,
             })
             .collect())
     }
