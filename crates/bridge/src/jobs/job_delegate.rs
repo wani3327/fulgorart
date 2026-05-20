@@ -232,8 +232,8 @@ impl CloudRunJobDelegate {
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
         let execution_id = execution_name
-            .split('/')
-            .next_back()
+            .rsplit('/')
+            .next()
             .unwrap_or(execution_name);
         let filter = format!(
             "resource.type=\"cloud_run_job\" labels.\"run.googleapis.com/execution_name\"=\"{execution_id}\""
