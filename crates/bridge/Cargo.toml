@@ -11,6 +11,7 @@ path = "src/main.rs"
 fulgorart-db = { path = "../db" }
 fulgorart-ingestor = { path = "../ingestor" }
 fulgorart-storage = { path = "../storage" }
+fulgorart-tagger = { path = "../tagger" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

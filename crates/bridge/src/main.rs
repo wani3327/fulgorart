@@ -1,9 +1,8 @@
 use anyhow::Result;
 
 use fulgorart_bridge::{
-    BridgeConfig,
-    MyImageGrabJob, CloudRunJobDelegate, R2StorageJob,
-    run_once,
+    run_once, BridgeConfig, CloudRunTaggerJob, LocalTaggerJob, MyImageGrabJob, R2StorageJob,
+    TaggerJobMode,
 };
 
 use fulgorart_db::Db;
@@ -30,8 +29,19 @@ async fn main() -> Result<()> {
 
     let image_grabber = MyImageGrabJob::from_config(&config);
     let storage = R2StorageJob::new(db.clone(), r2);
-    let delegate = CloudRunJobDelegate::new(db, config.cloud_run).await?;
-
-    run_once(&image_grabber, &storage, &delegate).await?;
+    match config.tagger_job_mode {
+        TaggerJobMode::CloudRun => {
+            let cloud_run_config = config
+                .cloud_run
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("Missing Cloud Run config"))?;
+            let tagger_job = CloudRunTaggerJob::new(db, cloud_run_config).await?;
+            run_once(&image_grabber, &storage, &tagger_job).await?;
+        }
+        TaggerJobMode::Local => {
+            let tagger_job = LocalTaggerJob::new(db, config.tagger_batch_size);
+            run_once(&image_grabber, &storage, &tagger_job).await?;
+        }
+    }
     Ok(())
 }

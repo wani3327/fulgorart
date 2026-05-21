@@ -1,3 +1,3 @@
 pub mod image_grabber;
-pub mod job_delegate;
 pub mod storage;
+pub mod tagger_job;

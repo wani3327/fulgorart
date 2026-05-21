@@ -8,8 +8,132 @@ use std::sync::Arc;
 use crate::CloudRunConfig;
 
 #[async_trait]
-pub trait JobDelegate: Send + Sync {
-    async fn dispatch_pending_jobs(&self) -> Result<()>;
+pub trait TaggerJob: Send + Sync {
+    async fn tag(&self) -> Result<()>;
+}
+
+#[derive(Debug, Clone)]
+struct BridgeTagResult {
+    key: String,
+    tags: Vec<BridgeTagPrediction>,
+}
+
+#[derive(Debug, Clone)]
+struct BridgeTagPrediction {
+    name: String,
+    category: Option<String>,
+    score: f32,
+}
+
+async fn apply_results(db: &Db, jobs: &[TagJobWithKey], results: &[BridgeTagResult]) -> Result<()> {
+    let result_map: HashMap<&str, &BridgeTagResult> = results
+        .iter()
+        .map(|result| (result.key.as_str(), result))
+        .collect();
+
+    for job in jobs {
+        match result_map.get(job.r2_key.as_str()) {
+            Some(result) => {
+                for prediction in &result.tags {
+                    let tag = db
+                        .get_or_create_tag(&prediction.name, prediction.category.as_deref())
+                        .await?;
+                    db.insert_image_tag(
+                        job.image_id,
+                        tag.id,
+                        "wd14",
+                        Some(prediction.score as f64),
+                    )
+                    .await?;
+                }
+                db.update_tag_job_status(job.job_id, "done", None).await?;
+            }
+            None => {
+                let message = format!("No tag output found for R2 key: {}", job.r2_key);
+                db.update_tag_job_status(job.job_id, "failed", Some(&message))
+                    .await?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn mark_batch_failed(db: &Db, jobs: &[TagJobWithKey], message: &str) -> Result<()> {
+    for job in jobs {
+        db.update_tag_job_status(job.job_id, "failed", Some(message))
+            .await?;
+    }
+    Ok(())
+}
+
+pub struct LocalTaggerJob {
+    db: Db,
+    batch_size: usize,
+}
+
+impl LocalTaggerJob {
+    pub fn new(db: Db, batch_size: usize) -> Self {
+        Self {
+            db,
+            batch_size: batch_size.max(1),
+        }
+    }
+
+    async fn run_batch(&self, keys: &[String]) -> Result<Vec<BridgeTagResult>> {
+        let outputs = fulgorart_tagger::tag_r2_keys(keys).await?;
+        Ok(outputs
+            .into_iter()
+            .map(|result| BridgeTagResult {
+                key: result.key,
+                tags: result
+                    .tags
+                    .into_iter()
+                    .map(|prediction| BridgeTagPrediction {
+                        name: prediction.name,
+                        category: prediction.category,
+                        score: prediction.score,
+                    })
+                    .collect(),
+            })
+            .collect())
+    }
+}
+
+#[async_trait]
+impl TaggerJob for LocalTaggerJob {
+    async fn tag(&self) -> Result<()> {
+        let batch_size = self.batch_size as i64;
+
+        loop {
+            let jobs = self.db.get_pending_tag_jobs_with_keys(batch_size).await?;
+            if jobs.is_empty() {
+                tracing::info!("No pending tag jobs");
+                break;
+            }
+
+            for job in &jobs {
+                self.db
+                    .update_tag_job_status(job.job_id, "running", None)
+                    .await?;
+            }
+
+            let keys: Vec<String> = jobs.iter().map(|job| job.r2_key.clone()).collect();
+            match self.run_batch(&keys).await {
+                Ok(results) => apply_results(&self.db, &jobs, &results).await?,
+                Err(error) => {
+                    let message = format!("{error:#}");
+                    mark_batch_failed(&self.db, &jobs, &message).await?;
+                }
+            }
+
+            if (jobs.len() as i64) < batch_size {
+                break;
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -69,26 +193,26 @@ struct ListLogEntriesResponse {
 }
 
 #[derive(Debug, Deserialize)]
-struct R2TagResult {
+struct CloudRunTagResult {
     pub key: String,
-    pub tags: Vec<TagPrediction>,
+    pub tags: Vec<CloudRunTagPrediction>,
 }
 
 #[derive(Debug, Deserialize)]
-struct TagPrediction {
+struct CloudRunTagPrediction {
     pub name: String,
     pub category: Option<String>,
     pub score: f32,
 }
 
-pub struct CloudRunJobDelegate {
+pub struct CloudRunTaggerJob {
     db: Db,
     config: CloudRunConfig,
     http: reqwest::Client,
     auth: Arc<dyn gcp_auth::TokenProvider>,
 }
 
-impl CloudRunJobDelegate {
+impl CloudRunTaggerJob {
     pub async fn new(db: Db, config: CloudRunConfig) -> Result<Self> {
         let http = reqwest::Client::new();
         let auth = gcp_auth::provider()
@@ -111,7 +235,7 @@ impl CloudRunJobDelegate {
         Ok(format!("Bearer {}", token.as_str()))
     }
 
-    async fn run_batch(&self, keys: &[String]) -> Result<Vec<R2TagResult>> {
+    async fn run_batch(&self, keys: &[String]) -> Result<Vec<BridgeTagResult>> {
         let execution_name = self.submit_execution(keys).await?;
         self.wait_for_execution(&execution_name).await?;
         self.fetch_logs(&execution_name).await
@@ -228,7 +352,7 @@ impl CloudRunJobDelegate {
         }
     }
 
-    async fn fetch_logs(&self, execution_name: &str) -> Result<Vec<R2TagResult>> {
+    async fn fetch_logs(&self, execution_name: &str) -> Result<Vec<BridgeTagResult>> {
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
         let execution_id = execution_name.rsplit('/').next().unwrap_or(execution_name);
@@ -269,8 +393,19 @@ impl CloudRunJobDelegate {
             if let Some(entries) = log_response.entries {
                 for entry in entries {
                     if let Some(payload) = entry.text_payload {
-                        match serde_json::from_str::<R2TagResult>(&payload) {
-                            Ok(result) => results.push(result),
+                        match serde_json::from_str::<CloudRunTagResult>(&payload) {
+                            Ok(result) => results.push(BridgeTagResult {
+                                key: result.key,
+                                tags: result
+                                    .tags
+                                    .into_iter()
+                                    .map(|tag| BridgeTagPrediction {
+                                        name: tag.name,
+                                        category: tag.category,
+                                        score: tag.score,
+                                    })
+                                    .collect(),
+                            }),
                             Err(error) => {
                                 tracing::warn!(payload = %payload, error = %error, "Skipping non-result log line")
                             }
@@ -287,50 +422,11 @@ impl CloudRunJobDelegate {
 
         Ok(results)
     }
-
-    async fn apply_results(&self, jobs: &[TagJobWithKey], results: &[R2TagResult]) -> Result<()> {
-        let result_map: HashMap<&str, &R2TagResult> = results
-            .iter()
-            .map(|result| (result.key.as_str(), result))
-            .collect();
-
-        for job in jobs {
-            match result_map.get(job.r2_key.as_str()) {
-                Some(result) => {
-                    for prediction in &result.tags {
-                        let tag = self
-                            .db
-                            .get_or_create_tag(&prediction.name, prediction.category.as_deref())
-                            .await?;
-                        self.db
-                            .insert_image_tag(
-                                job.image_id,
-                                tag.id,
-                                "wd14",
-                                Some(prediction.score as f64),
-                            )
-                            .await?;
-                    }
-                    self.db
-                        .update_tag_job_status(job.job_id, "done", None)
-                        .await?;
-                }
-                None => {
-                    let message = format!("No log output found for R2 key: {}", job.r2_key);
-                    self.db
-                        .update_tag_job_status(job.job_id, "failed", Some(&message))
-                        .await?;
-                }
-            }
-        }
-
-        Ok(())
-    }
 }
 
 #[async_trait]
-impl JobDelegate for CloudRunJobDelegate {
-    async fn dispatch_pending_jobs(&self) -> Result<()> {
+impl TaggerJob for CloudRunTaggerJob {
+    async fn tag(&self) -> Result<()> {
         let batch_size = self.config.tagger_batch_size as i64;
 
         loop {
@@ -348,14 +444,10 @@ impl JobDelegate for CloudRunJobDelegate {
 
             let keys: Vec<String> = jobs.iter().map(|job| job.r2_key.clone()).collect();
             match self.run_batch(&keys).await {
-                Ok(results) => self.apply_results(&jobs, &results).await?,
+                Ok(results) => apply_results(&self.db, &jobs, &results).await?,
                 Err(error) => {
                     let message = format!("{error:#}");
-                    for job in &jobs {
-                        self.db
-                            .update_tag_job_status(job.job_id, "failed", Some(&message))
-                            .await?;
-                    }
+                    mark_batch_failed(&self.db, &jobs, &message).await?;
                 }
             }
 

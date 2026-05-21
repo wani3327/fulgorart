@@ -1,17 +1,21 @@
 mod config;
 mod jobs;
 
-pub use config::{BridgeConfig, CloudRunConfig};
-pub use jobs::{image_grabber::MyImageGrabJob, job_delegate::CloudRunJobDelegate, storage::R2StorageJob};
+pub use config::{BridgeConfig, CloudRunConfig, TaggerJobMode};
+pub use jobs::{
+    image_grabber::MyImageGrabJob,
+    storage::R2StorageJob,
+    tagger_job::{CloudRunTaggerJob, LocalTaggerJob},
+};
 
 use anyhow::Result;
 
-use crate::jobs::{image_grabber::ImageGrabJob, job_delegate::JobDelegate, storage::StorageJob};
+use crate::jobs::{image_grabber::ImageGrabJob, storage::StorageJob, tagger_job::TaggerJob};
 
-pub async fn run_once<IG: ImageGrabJob, S: StorageJob, D: JobDelegate>(
+pub async fn run_once<IG: ImageGrabJob, S: StorageJob, T: TaggerJob>(
     image_grabber: &IG,
     storage: &S,
-    delegate: &D,
+    tagger_job: &T,
 ) -> Result<()> {
     let posts = image_grabber.grab_liked_posts().await?;
     if posts.is_empty() {
@@ -21,5 +25,5 @@ pub async fn run_once<IG: ImageGrabJob, S: StorageJob, D: JobDelegate>(
         tracing::info!(stored, "Stored grabbed images");
     }
 
-    delegate.dispatch_pending_jobs().await
+    tagger_job.tag().await
 }

@@ -399,10 +399,10 @@ pub async fn run_for_urls(urls: &[String]) -> Result<usize> {
 
 // ─── R2TaggerWorker ───────────────────────────────────────────────────────────
 
-#[derive(Serialize)]
-struct R2TagResult {
-    key: String,
-    tags: Vec<TagPrediction>,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct R2TagResult {
+    pub key: String,
+    pub tags: Vec<TagPrediction>,
 }
 
 /// Worker that fetches images from a Cloudflare R2 bucket and tags them.
@@ -419,39 +419,56 @@ impl R2TaggerWorker {
     pub fn new(tagger: Box<dyn Tagger>, r2: R2Client, bucket: String) -> Self {
         R2TaggerWorker { tagger, r2, bucket }
     }
-}
 
-#[async_trait]
-impl TaggerWorker for R2TaggerWorker {
-    async fn run(&self, inputs: &[String]) -> Result<usize> {
-        let mut total = 0usize;
+    pub async fn tag_inputs(&self, inputs: &[String]) -> Result<Vec<R2TagResult>> {
+        let mut results = Vec::new();
         for raw_key in inputs {
             let key = raw_key.strip_prefix("r2://").unwrap_or(raw_key);
             tracing::debug!(%key, bucket = %self.bucket, "Fetching image from R2");
 
             let bytes = self.r2.download(key).await?;
             let predictions = self.tagger.tag_image(&bytes).await?;
-
-            let result = R2TagResult {
+            results.push(R2TagResult {
                 key: key.to_string(),
                 tags: predictions,
-            };
-
-            println!("{}", serde_json::to_string(&result)?);
-            total += 1;
+            });
         }
-        Ok(total)
+        Ok(results)
     }
 }
 
-pub async fn run_for_r2_keys(keys: &[String]) -> Result<usize> {
+#[async_trait]
+impl TaggerWorker for R2TaggerWorker {
+    async fn run(&self, inputs: &[String]) -> Result<usize> {
+        let results = self.tag_inputs(inputs).await?;
+        for result in &results {
+            println!("{}", serde_json::to_string(&result)?);
+        }
+        Ok(results.len())
+    }
+}
+
+pub async fn tag_r2_keys(keys: &[String]) -> Result<Vec<R2TagResult>> {
     let tagger = init()?;
     let r2_config = config::r2_config_from_env()?;
     let r2 = R2Client::new(&r2_config).await?;
     let bucket = r2.bucket().to_string();
 
     let worker = R2TaggerWorker::new(Box::new(tagger), r2, bucket);
-    let n = worker.run(keys).await?;
+    worker.tag_inputs(keys).await
+}
+
+pub fn print_r2_results_as_json_lines(results: &[R2TagResult]) -> Result<()> {
+    for result in results {
+        println!("{}", serde_json::to_string(result)?);
+    }
+    Ok(())
+}
+
+pub async fn run_for_r2_keys(keys: &[String]) -> Result<usize> {
+    let results = tag_r2_keys(keys).await?;
+    print_r2_results_as_json_lines(&results)?;
+    let n = results.len();
     tracing::info!("Tagger: processed {} image(s) from R2", n);
     Ok(n)
 }

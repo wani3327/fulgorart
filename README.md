@@ -11,7 +11,7 @@ A personal art collection manager that grabs liked images from SNS, stores them 
 | `crates/storage` | Cloudflare R2 / S3 client and R2 config |
 | `crates/ingestor` | Independent image-grabber app; lib returns liked images as bytes, bin saves them to a directory |
 | `crates/tagger` | Independent WD14 tagger app for local files, URLs, or `r2://` keys |
-| `crates/bridge` | Orchestrator app; uses ingestor + storage + Cloud Run job delegation to persist images and apply tags |
+| `crates/bridge` | Orchestrator app; combines grabber + storage + tagger jobs and persists/applies tags |
 | `crates/web` | Axum web UI and REST API |
 | `crates/cli` | Local maintenance CLI |
 
@@ -35,13 +35,19 @@ PIXIV_USER_ID=...                # optional; auto-resolved when omitted
 TWITTER_BEARER_TOKEN=...
 ```
 
-### Bridge Cloud Run delegation
+### Bridge tagging mode
+
+```env
+TAGGER_JOB_MODE=cloud_run         # or local
+TAGGER_BATCH_SIZE=20
+```
+
+### Bridge Cloud Run mode
 
 ```env
 GCP_PROJECT_ID=my-project
 GCP_REGION=asia-northeast1
 CLOUD_RUN_JOB_NAME=fulgorart-tagger
-TAGGER_BATCH_SIZE=20
 ```
 
 ### Tagger model paths
@@ -81,7 +87,7 @@ The binary saves files under `<output-dir>/<source_type>/<source_post_id>/`.
 
 ## Run the bridge app
 
-Grab liked images, upload to R2, persist DB rows, queue tag jobs, and delegate tagging through Cloud Run:
+Grab liked images, upload to R2, persist DB rows, queue tag jobs, and execute the configured `TaggerJob` mode:
 
 ```bash
 cargo run --bin fulgorart-bridge

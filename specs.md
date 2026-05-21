@@ -38,9 +38,12 @@ MVP focus: **reliable image grabbing + bridge orchestration + storage + tagging 
   - Uploads grabbed images with `fulgorart-storage`.
   - Creates and updates DB rows with `fulgorart-db`.
   - Queues pending tag jobs.
-  - Delegates tagging through GCP Cloud Run, using `fulgorart-tagger` as the job payload.
-  - Reads back delegate output and stores tags and job status.
-  - Internally separates image-grabber, storage, and job-delegate responsibilities behind traits.
+  - Executes tagging behind a `TaggerJob` trait.
+  - Supports at least two `TaggerJob` implementations:
+    - local tagging by calling `fulgorart-tagger` library code
+    - Cloud Run tagging by calling GCP Cloud Run Job
+  - Stores returned tags and updates tag job status.
+  - Internally separates image-grabber, storage, and tagger responsibilities behind traits.
 
 - **Web app**
   - Serves pages for browsing images.
@@ -52,7 +55,7 @@ MVP focus: **reliable image grabbing + bridge orchestration + storage + tagging 
 - Primary server: small VM.
 - Object storage: Cloudflare R2 (S3-compatible).
 - DB: SQLite for MVP.
-- Cloud delegate: GCP Cloud Run Job running `fulgorart-tagger`.
+- Tagger runtime can be local (`fulgorart-tagger` library call) or cloud (GCP Cloud Run job).
 
 ## 3. Data Model (MVP)
 
@@ -182,8 +185,9 @@ Because Twitter/X and Pixiv APIs can be restricted, image grabbing should be ada
 2. Ingestor returns grabbed posts and image bytes.
 3. Bridge uploads images to R2.
 4. Bridge persists `post`, `image_asset`, and `tag_job` rows.
-5. Bridge dispatches `fulgorart-tagger` through Cloud Run with `r2://` keys.
-6. Bridge reads delegate output and stores tags.
+5. Bridge invokes the configured `TaggerJob` strategy.
+6. `TaggerJob` runs tagging (local or Cloud Run) and returns results.
+7. Bridge stores tags and updates queue state.
 
 ### 6.3 Idempotency
 - Bridge must be safe to run repeatedly.
@@ -199,14 +203,14 @@ Recommended canonical key:
 
 - Require authentication for web UI in private deployments.
 - Do not expose R2 credentials to clients.
-- Keep source credentials and Cloud Run credentials outside `fulgorart-core` and scoped to the crates that use them.
+- Keep source credentials, local tagger config, and Cloud Run credentials outside `fulgorart-core` and scoped to the crates that use them.
 
 ## 8. Observability
 
 - Structured logs for:
   - image grabbing
   - upload events
-  - tagging delegation outcomes
+  - tagger job outcomes (local or cloud)
   - tagging result application
 
 ## 9. Rust implementation notes

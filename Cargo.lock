@@ -1260,6 +1260,7 @@ dependencies = [
  "fulgorart-db",
  "fulgorart-ingestor",
  "fulgorart-storage",
+ "fulgorart-tagger",
  "gcp_auth",
  "hex",
  "reqwest 0.12.28",
