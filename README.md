@@ -15,13 +15,6 @@ A personal art collection manager that grabs liked images from SNS, stores them 
 | `crates/web` | Axum web UI and REST API |
 | `crates/cli` | Local maintenance CLI |
 
-## Responsibility split
-
-- `fulgorart-ingestor` does **not** upload to R2 or write DB rows anymore.
-- `fulgorart-tagger` stays an independent app and only emits JSON tag results for the inputs it receives.
-- `fulgorart-bridge` owns orchestration: call the ingestor library, upload to storage, write DB rows, queue tag jobs, call the Cloud Run delegate, and store returned tags.
-- Environment parsing now lives in crate-local or closer shared crates (`db`, `storage`) instead of `fulgorart-core`.
-
 ## Common environment variables
 
 ### Shared DB / storage
