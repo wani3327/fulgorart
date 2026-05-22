@@ -25,12 +25,5 @@ pub async fn run_once<IG: ImageGrabJob, S: StorageJob, T: TaggerJob>(
         tracing::info!(stored, "Stored grabbed images");
     }
 
-    let summary = tagger_job.tag().await?;
-    tracing::info!(
-        succeeded = summary.succeeded,
-        failed = summary.failed,
-        total = summary.total(),
-        "Tagger job completed"
-    );
-    Ok(())
+    tagger_job.tag().await
 }

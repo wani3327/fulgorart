@@ -9,24 +9,7 @@ use crate::CloudRunConfig;
 
 #[async_trait]
 pub trait TaggerJob: Send + Sync {
-    async fn tag(&self) -> Result<TaggerJobSummary>;
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct TaggerJobSummary {
-    pub succeeded: usize,
-    pub failed: usize,
-}
-
-impl TaggerJobSummary {
-    pub fn total(self) -> usize {
-        self.succeeded + self.failed
-    }
-
-    fn merge(&mut self, other: Self) {
-        self.succeeded += other.succeeded;
-        self.failed += other.failed;
-    }
+    async fn tag(&self) -> Result<()>;
 }
 
 #[derive(Debug, Clone)]
@@ -42,16 +25,11 @@ struct BridgeTagPrediction {
     score: f32,
 }
 
-async fn apply_results(
-    db: &Db,
-    jobs: &[TagJobWithKey],
-    results: &[BridgeTagResult],
-) -> Result<TaggerJobSummary> {
+async fn apply_results(db: &Db, jobs: &[TagJobWithKey], results: &[BridgeTagResult]) -> Result<()> {
     let result_map: HashMap<&str, &BridgeTagResult> = results
         .iter()
         .map(|result| (result.key.as_str(), result))
         .collect();
-    let mut summary = TaggerJobSummary::default();
 
     for job in jobs {
         match result_map.get(job.r2_key.as_str()) {
@@ -69,26 +47,24 @@ async fn apply_results(
                     .await?;
                 }
                 db.update_tag_job_status(job.job_id, "done", None).await?;
-                summary.succeeded += 1;
             }
             None => {
                 let message = format!("No tag output found for R2 key: {}", job.r2_key);
                 db.update_tag_job_status(job.job_id, "failed", Some(&message))
                     .await?;
-                summary.failed += 1;
             }
         }
     }
 
-    Ok(summary)
+    Ok(())
 }
 
-async fn mark_batch_failed(db: &Db, jobs: &[TagJobWithKey], message: &str) -> Result<usize> {
+async fn mark_batch_failed(db: &Db, jobs: &[TagJobWithKey], message: &str) -> Result<()> {
     for job in jobs {
         db.update_tag_job_status(job.job_id, "failed", Some(message))
             .await?;
     }
-    Ok(jobs.len())
+    Ok(())
 }
 
 pub struct LocalTaggerJob {
@@ -126,9 +102,8 @@ impl LocalTaggerJob {
 
 #[async_trait]
 impl TaggerJob for LocalTaggerJob {
-    async fn tag(&self) -> Result<TaggerJobSummary> {
+    async fn tag(&self) -> Result<()> {
         let batch_size = self.batch_size as i64;
-        let mut summary = TaggerJobSummary::default();
 
         loop {
             let jobs = self.db.get_pending_tag_jobs_with_keys(batch_size).await?;
@@ -145,10 +120,10 @@ impl TaggerJob for LocalTaggerJob {
 
             let keys: Vec<String> = jobs.iter().map(|job| job.r2_key.clone()).collect();
             match self.run_batch(&keys).await {
-                Ok(results) => summary.merge(apply_results(&self.db, &jobs, &results).await?),
+                Ok(results) => apply_results(&self.db, &jobs, &results).await?,
                 Err(error) => {
                     let message = format!("{error:#}");
-                    summary.failed += mark_batch_failed(&self.db, &jobs, &message).await?;
+                    mark_batch_failed(&self.db, &jobs, &message).await?;
                 }
             }
 
@@ -157,7 +132,7 @@ impl TaggerJob for LocalTaggerJob {
             }
         }
 
-        Ok(summary)
+        Ok(())
     }
 }
 
@@ -451,9 +426,8 @@ impl CloudRunTaggerJob {
 
 #[async_trait]
 impl TaggerJob for CloudRunTaggerJob {
-    async fn tag(&self) -> Result<TaggerJobSummary> {
+    async fn tag(&self) -> Result<()> {
         let batch_size = self.config.tagger_batch_size as i64;
-        let mut summary = TaggerJobSummary::default();
 
         loop {
             let jobs = self.db.get_pending_tag_jobs_with_keys(batch_size).await?;
@@ -470,10 +444,10 @@ impl TaggerJob for CloudRunTaggerJob {
 
             let keys: Vec<String> = jobs.iter().map(|job| job.r2_key.clone()).collect();
             match self.run_batch(&keys).await {
-                Ok(results) => summary.merge(apply_results(&self.db, &jobs, &results).await?),
+                Ok(results) => apply_results(&self.db, &jobs, &results).await?,
                 Err(error) => {
                     let message = format!("{error:#}");
-                    summary.failed += mark_batch_failed(&self.db, &jobs, &message).await?;
+                    mark_batch_failed(&self.db, &jobs, &message).await?;
                 }
             }
 
@@ -482,6 +456,6 @@ impl TaggerJob for CloudRunTaggerJob {
             }
         }
 
-        Ok(summary)
+        Ok(())
     }
 }
