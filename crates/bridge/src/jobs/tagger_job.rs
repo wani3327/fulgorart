@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use fulgorart_db::{Db, TagJobWithKey};
 use fulgorart_storage::{R2Client, R2Config};
-use fulgorart_tagger::OnnxTagger;
+use fulgorart_tagger::{OnnxTagger, Tagger};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -86,7 +86,7 @@ impl LocalTaggerJob {
         for raw_key in keys {
             let key = raw_key.strip_prefix("r2://").unwrap_or(raw_key);
             let bytes = self.r2.download(key).await?;
-            let tags = self.tagger.tag_image_bytes(&bytes).await?;
+            let tags = self.tagger.tag_image(&bytes).await?;
             results.push(BridgeTagResult {
                 key: key.to_string(),
                 tags: tags

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use fulgorart_storage::{R2Client, R2Config};
-use fulgorart_tagger::{OnnxTagger, TagPrediction};
+use fulgorart_tagger::{OnnxTagger, Tagger, TagPrediction};
 use serde::Serialize;
 
 fn print_usage() {
@@ -95,7 +95,7 @@ async fn process_paths(tagger: &OnnxTagger, paths: &[String]) -> Result<usize> {
         let bytes = tokio::fs::read(path)
             .await
             .with_context(|| format!("Failed to read image file: {}", path))?;
-        let tags = tagger.tag_image_bytes(&bytes).await?;
+        let tags = tagger.tag_image(&bytes).await?;
         println!(
             "{}",
             serde_json::to_string(&PathTagResult {
@@ -125,7 +125,7 @@ async fn process_urls(tagger: &OnnxTagger, urls: &[String]) -> Result<usize> {
     let mut total = 0usize;
     for url in urls {
         let bytes = download_url(&http, url).await?;
-        let tags = tagger.tag_image_bytes(&bytes).await?;
+        let tags = tagger.tag_image(&bytes).await?;
         println!(
             "{}",
             serde_json::to_string(&UrlTagResult {
@@ -157,7 +157,7 @@ async fn process_r2_keys(tagger: &OnnxTagger, keys: &[String]) -> Result<usize> 
         let key = raw_key.strip_prefix("r2://").unwrap_or(raw_key);
         tracing::debug!(%key, bucket = r2.bucket(), "Fetching image from R2");
         let bytes = r2.download(key).await?;
-        let tags = tagger.tag_image_bytes(&bytes).await?;
+        let tags = tagger.tag_image(&bytes).await?;
         println!(
             "{}",
             serde_json::to_string(&R2TagResult {

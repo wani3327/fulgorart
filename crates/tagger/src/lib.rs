@@ -115,10 +115,6 @@ impl OnnxTagger {
         )
     }
 
-    pub async fn tag_image_bytes(&self, image_bytes: &[u8]) -> Result<Vec<TagPrediction>> {
-        self.run_inference(image_bytes)
-    }
-
     /// Parse `selected_tags.csv`.  Returns `(labels, rating_count)`.
     fn load_labels(path: &str) -> Result<(Vec<LabelEntry>, usize)> {
         #[derive(Deserialize)]
