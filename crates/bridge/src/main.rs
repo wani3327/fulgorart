@@ -1,8 +1,13 @@
+mod jobs;
+
 use anyhow::Result;
 
-use fulgorart_bridge::{
-    run_once, BridgeConfig, CloudRunTaggerJob, LocalTaggerJob, MyImageGrabJob, R2StorageJob,
-    TaggerJobMode,
+use fulgorart_bridge::{run_once, BridgeConfig, TaggerJobMode};
+
+use crate::jobs::{
+    image_grabber::MyImageGrabJob,
+    storage::R2StorageJob,
+    tagger_job::{CloudRunTaggerJob, LocalTaggerJob},
 };
 
 use fulgorart_db::Db;

@@ -2,12 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use fulgorart_ingestor::{grab, GrabbedPost, PixivAdapter, TwitterAdapter};
 
-use crate::BridgeConfig;
-
-#[async_trait]
-pub trait ImageGrabJob: Send + Sync {
-    async fn grab_liked_posts(&self) -> Result<Vec<GrabbedPost>>;
-}
+use fulgorart_bridge::{BridgeConfig, ImageGrabJob};
 
 pub struct MyImageGrabJob {
     pixiv: PixivAdapter,

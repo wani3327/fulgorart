@@ -5,12 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::CloudRunConfig;
-
-#[async_trait]
-pub trait TaggerJob: Send + Sync {
-    async fn tag(&self) -> Result<()>;
-}
+use fulgorart_bridge::{CloudRunConfig, TaggerJob};
 
 #[derive(Debug, Clone)]
 struct BridgeTagResult {

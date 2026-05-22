@@ -5,10 +5,7 @@ use fulgorart_ingestor::GrabbedPost;
 use fulgorart_storage::R2Client;
 use sha2::Digest;
 
-#[async_trait]
-pub trait StorageJob: Send + Sync {
-    async fn store_posts(&self, posts: Vec<GrabbedPost>) -> Result<usize>;
-}
+use fulgorart_bridge::StorageJob;
 
 pub struct R2StorageJob {
     db: Db,

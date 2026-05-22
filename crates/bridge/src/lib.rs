@@ -1,16 +1,24 @@
 mod config;
-mod jobs;
-
-pub use config::{BridgeConfig, CloudRunConfig, TaggerJobMode};
-pub use jobs::{
-    image_grabber::MyImageGrabJob,
-    storage::R2StorageJob,
-    tagger_job::{CloudRunTaggerJob, LocalTaggerJob},
-};
 
 use anyhow::Result;
+use async_trait::async_trait;
 
-use crate::jobs::{image_grabber::ImageGrabJob, storage::StorageJob, tagger_job::TaggerJob};
+pub use config::{BridgeConfig, CloudRunConfig, TaggerJobMode};
+
+#[async_trait]
+pub trait ImageGrabJob: Send + Sync {
+    async fn grab_liked_posts(&self) -> Result<Vec<fulgorart_ingestor::GrabbedPost>>;
+}
+
+#[async_trait]
+pub trait StorageJob: Send + Sync {
+    async fn store_posts(&self, posts: Vec<fulgorart_ingestor::GrabbedPost>) -> Result<usize>;
+}
+
+#[async_trait]
+pub trait TaggerJob: Send + Sync {
+    async fn tag(&self) -> Result<()>;
+}
 
 pub async fn run_once<IG: ImageGrabJob, S: StorageJob, T: TaggerJob>(
     image_grabber: &IG,
