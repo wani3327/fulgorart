@@ -44,7 +44,8 @@ async fn main() -> Result<()> {
             run_once(&image_grabber, &storage, &tagger_job).await?;
         }
         TaggerJobMode::Local => {
-            let tagger_job = LocalTaggerJob::new(db, config.tagger_batch_size);
+            let tagger_job =
+                LocalTaggerJob::new(db, config.r2.clone(), config.tagger_batch_size).await?;
             run_once(&image_grabber, &storage, &tagger_job).await?;
         }
     }

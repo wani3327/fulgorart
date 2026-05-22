@@ -2,9 +2,6 @@ mod config;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use bytes::Bytes;
-use fulgorart_storage::R2Client;
-
 pub use config::TaggerConfig;
 use ndarray::Array4;
 use ort::{
@@ -30,18 +27,6 @@ pub trait Tagger: Send + Sync {
     async fn tag_image(&self, image_bytes: &[u8]) -> Result<Vec<TagPrediction>>;
 }
 
-// ─── Worker trait ─────────────────────────────────────────────────────────────
-
-/// Common interface for all tagger workers.
-/// Each worker receives a list of string inputs (file paths, URLs, or R2 object
-/// keys) and returns the number of successfully processed items.
-#[async_trait]
-pub trait TaggerWorker: Send + Sync {
-    async fn run(&self, inputs: &[String]) -> Result<usize>;
-}
-
-// ─── Label entry loaded from selected_tags.csv ────────────────────────────────
-
 #[derive(Debug, Clone)]
 struct LabelEntry {
     name: String,
@@ -62,8 +47,6 @@ impl LabelEntry {
         }
     }
 }
-
-// ─── OnnxTagger ───────────────────────────────────────────────────────────────
 
 /// WD14 tagger backed by an ONNX model via `ort`.
 ///
@@ -120,6 +103,20 @@ impl OnnxTagger {
             character_threshold,
             rating_count,
         })
+    }
+
+    pub fn from_env() -> Result<Self> {
+        let config = config::TaggerConfig::from_env();
+        Self::new(
+            &config.model_path,
+            &config.labels_path,
+            config.general_threshold,
+            config.character_threshold,
+        )
+    }
+
+    pub async fn tag_image_bytes(&self, image_bytes: &[u8]) -> Result<Vec<TagPrediction>> {
+        self.run_inference(image_bytes)
     }
 
     /// Parse `selected_tags.csv`.  Returns `(labels, rating_count)`.
@@ -193,11 +190,8 @@ impl OnnxTagger {
         }
         Ok(tensor)
     }
-}
 
-#[async_trait]
-impl Tagger for OnnxTagger {
-    async fn tag_image(&self, image_bytes: &[u8]) -> Result<Vec<TagPrediction>> {
+    fn run_inference(&self, image_bytes: &[u8]) -> Result<Vec<TagPrediction>> {
         let array = Self::preprocess(image_bytes)?;
 
         let mut session = self
@@ -262,213 +256,9 @@ impl Tagger for OnnxTagger {
     }
 }
 
-// ─── Entry point ──────────────────────────────────────────────────────────────
-
-fn init() -> Result<OnnxTagger> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .try_init()
-        .ok();
-
-    let config = config::TaggerConfig::from_env();
-    let tagger = OnnxTagger::new(
-        &config.model_path,
-        &config.labels_path,
-        config.general_threshold,
-        config.character_threshold,
-    )?;
-    Ok(tagger)
-}
-
-// ─── LocalPathTaggerWorker ────────────────────────────────────────────────────
-
-#[derive(Serialize)]
-struct PathTagResult {
-    path: String,
-    tags: Vec<TagPrediction>,
-}
-
-/// CLI-triggered worker: tags explicitly provided local file paths and exits.
-pub struct LocalPathTaggerWorker {
-    pub tagger: Box<dyn Tagger>,
-}
-
-impl LocalPathTaggerWorker {
-    pub fn new(tagger: Box<dyn Tagger>) -> Self {
-        LocalPathTaggerWorker { tagger }
-    }
-}
-
 #[async_trait]
-impl TaggerWorker for LocalPathTaggerWorker {
-    async fn run(&self, inputs: &[String]) -> Result<usize> {
-        let mut total = 0usize;
-        for path in inputs {
-            let bytes = tokio::fs::read(path)
-                .await
-                .with_context(|| format!("Failed to read image file: {}", path))?;
-            let predictions = self.tagger.tag_image(&bytes).await?;
-
-            let result = PathTagResult {
-                path: path.to_string(),
-                tags: predictions,
-            };
-
-            println!("{}", serde_json::to_string(&result)?);
-            total += 1;
-        }
-        Ok(total)
+impl Tagger for OnnxTagger {
+    async fn tag_image(&self, image_bytes: &[u8]) -> Result<Vec<TagPrediction>> {
+        self.run_inference(image_bytes)
     }
-}
-
-pub async fn run_for_paths(paths: &[String]) -> Result<usize> {
-    let tagger = init()?;
-
-    let worker = LocalPathTaggerWorker::new(Box::new(tagger));
-    let n = worker.run(paths).await?;
-    tracing::info!("Tagger: processed {} local file(s)", n);
-    Ok(n)
-}
-
-// ─── UrlTaggerWorker ──────────────────────────────────────────────────────────
-
-#[derive(Serialize)]
-struct UrlTagResult {
-    url: String,
-    tags: Vec<TagPrediction>,
-}
-
-/// CLI-triggered worker: downloads images from URLs and tags them, then exits.
-pub struct UrlTaggerWorker {
-    pub tagger: Box<dyn Tagger>,
-    pub http: reqwest::Client,
-}
-
-impl UrlTaggerWorker {
-    pub fn new(tagger: Box<dyn Tagger>) -> Self {
-        UrlTaggerWorker {
-            tagger,
-            http: reqwest::Client::new(),
-        }
-    }
-
-    async fn download(&self, url: &str) -> Result<Bytes> {
-        tracing::debug!(%url, "Downloading image from URL");
-        let response = self
-            .http
-            .get(url)
-            .send()
-            .await
-            .context("HTTP request failed")?
-            .error_for_status()
-            .context("HTTP error status")?;
-        response.bytes().await.context("Failed to read image body")
-    }
-}
-
-#[async_trait]
-impl TaggerWorker for UrlTaggerWorker {
-    async fn run(&self, inputs: &[String]) -> Result<usize> {
-        let mut total = 0usize;
-        for url in inputs {
-            let bytes = self.download(url).await?;
-            let predictions = self.tagger.tag_image(&bytes).await?;
-
-            let result = UrlTagResult {
-                url: url.clone(),
-                tags: predictions,
-            };
-
-            println!("{}", serde_json::to_string(&result)?);
-            total += 1;
-        }
-        Ok(total)
-    }
-}
-
-pub async fn run_for_urls(urls: &[String]) -> Result<usize> {
-    let tagger = init()?;
-
-    let worker = UrlTaggerWorker::new(Box::new(tagger));
-    let n = worker.run(urls).await?;
-    tracing::info!("Tagger: processed {} image(s) from URLs", n);
-    Ok(n)
-}
-
-// ─── R2TaggerWorker ───────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct R2TagResult {
-    pub key: String,
-    pub tags: Vec<TagPrediction>,
-}
-
-/// Worker that fetches images from a Cloudflare R2 bucket and tags them.
-///
-/// Each input string is an R2 object key (with an optional `r2://` prefix that
-/// will be stripped automatically).
-pub struct R2TaggerWorker {
-    pub tagger: Box<dyn Tagger>,
-    pub r2: R2Client,
-    pub bucket: String,
-}
-
-impl R2TaggerWorker {
-    pub fn new(tagger: Box<dyn Tagger>, r2: R2Client, bucket: String) -> Self {
-        R2TaggerWorker { tagger, r2, bucket }
-    }
-
-    pub async fn tag_inputs(&self, inputs: &[String]) -> Result<Vec<R2TagResult>> {
-        let mut results = Vec::new();
-        for raw_key in inputs {
-            let key = raw_key.strip_prefix("r2://").unwrap_or(raw_key);
-            tracing::debug!(%key, bucket = %self.bucket, "Fetching image from R2");
-
-            let bytes = self.r2.download(key).await?;
-            let predictions = self.tagger.tag_image(&bytes).await?;
-            results.push(R2TagResult {
-                key: key.to_string(),
-                tags: predictions,
-            });
-        }
-        Ok(results)
-    }
-}
-
-#[async_trait]
-impl TaggerWorker for R2TaggerWorker {
-    async fn run(&self, inputs: &[String]) -> Result<usize> {
-        let results = self.tag_inputs(inputs).await?;
-        for result in &results {
-            println!("{}", serde_json::to_string(&result)?);
-        }
-        Ok(results.len())
-    }
-}
-
-pub async fn tag_r2_keys(keys: &[String]) -> Result<Vec<R2TagResult>> {
-    let tagger = init()?;
-    let r2_config = config::r2_config_from_env()?;
-    let r2 = R2Client::new(&r2_config).await?;
-    let bucket = r2.bucket().to_string();
-
-    let worker = R2TaggerWorker::new(Box::new(tagger), r2, bucket);
-    worker.tag_inputs(keys).await
-}
-
-pub fn print_r2_results_as_json_lines(results: &[R2TagResult]) -> Result<()> {
-    for result in results {
-        println!("{}", serde_json::to_string(result)?);
-    }
-    Ok(())
-}
-
-pub async fn run_for_r2_keys(keys: &[String]) -> Result<usize> {
-    let results = tag_r2_keys(keys).await?;
-    print_r2_results_as_json_lines(&results)?;
-    let n = results.len();
-    tracing::info!("Tagger: processed {} image(s) from R2", n);
-    Ok(n)
 }
