@@ -1,6 +1,3 @@
-use anyhow::{bail, Result};
-use fulgorart_storage::R2Config;
-
 #[derive(Debug, Clone)]
 pub struct TaggerConfig {
     pub model_path: String,
@@ -27,12 +24,4 @@ impl TaggerConfig {
                 .unwrap_or(0.75),
         }
     }
-}
-
-pub fn r2_config_from_env() -> Result<R2Config> {
-    let config = R2Config::from_env();
-    if config.access_key_id.is_empty() || config.secret_access_key.is_empty() {
-        bail!("FULGORART_R2_ACCESS_KEY_ID and FULGORART_R2_SECRET_ACCESS_KEY are required for R2 mode");
-    }
-    Ok(config)
 }

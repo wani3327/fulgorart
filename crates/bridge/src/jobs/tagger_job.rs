@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use fulgorart_db::{Db, TagJobWithKey};
+use fulgorart_storage::{R2Client, R2Config};
+use fulgorart_tagger::OnnxTagger;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -69,25 +71,30 @@ async fn mark_batch_failed(db: &Db, jobs: &[TagJobWithKey], message: &str) -> Re
 
 pub struct LocalTaggerJob {
     db: Db,
+    r2: R2Client,
+    tagger: OnnxTagger,
     batch_size: usize,
 }
 
 impl LocalTaggerJob {
-    pub fn new(db: Db, batch_size: usize) -> Self {
-        Self {
+    pub async fn new(db: Db, r2_config: R2Config, batch_size: usize) -> Result<Self> {
+        Ok(Self {
             db,
+            r2: R2Client::new(&r2_config).await?,
+            tagger: OnnxTagger::from_env()?,
             batch_size: batch_size.max(1),
-        }
+        })
     }
 
     async fn run_batch(&self, keys: &[String]) -> Result<Vec<BridgeTagResult>> {
-        let outputs = fulgorart_tagger::tag_r2_keys(keys).await?;
-        Ok(outputs
-            .into_iter()
-            .map(|result| BridgeTagResult {
-                key: result.key,
-                tags: result
-                    .tags
+        let mut results = Vec::with_capacity(keys.len());
+        for raw_key in keys {
+            let key = raw_key.strip_prefix("r2://").unwrap_or(raw_key);
+            let bytes = self.r2.download(key).await?;
+            let tags = self.tagger.tag_image_bytes(&bytes).await?;
+            results.push(BridgeTagResult {
+                key: key.to_string(),
+                tags: tags
                     .into_iter()
                     .map(|prediction| BridgeTagPrediction {
                         name: prediction.name,
@@ -95,8 +102,9 @@ impl LocalTaggerJob {
                         score: prediction.score,
                     })
                     .collect(),
-            })
-            .collect())
+            });
+        }
+        Ok(results)
     }
 }
 
