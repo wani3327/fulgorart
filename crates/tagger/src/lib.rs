@@ -1,7 +1,6 @@
 mod config;
 
 use anyhow::{Context, Result};
-use async_trait::async_trait;
 pub use config::TaggerConfig;
 use ndarray::Array4;
 use ort::{
@@ -20,11 +19,6 @@ pub struct TagPrediction {
     pub name: String,
     pub category: Option<String>,
     pub score: f32,
-}
-
-#[async_trait]
-pub trait Tagger: Send + Sync {
-    async fn tag_image(&self, image_bytes: &[u8]) -> Result<Vec<TagPrediction>>;
 }
 
 #[derive(Debug, Clone)]
@@ -54,7 +48,7 @@ impl LabelEntry {
 /// on `LD_LIBRARY_PATH` / `PATH`.  Download the appropriate ONNX Runtime
 /// release from <https://github.com/microsoft/onnxruntime/releases> and place
 /// it next to the binary or in a system library path.
-pub struct OnnxTagger {
+pub struct Wd14Tagger {
     session: Mutex<Session>,
     /// All tag labels including the leading rating rows.
     labels: Vec<LabelEntry>,
@@ -66,7 +60,7 @@ pub struct OnnxTagger {
     rating_count: usize,
 }
 
-impl OnnxTagger {
+impl Wd14Tagger {
     /// Load the ONNX model and the labels CSV.
     ///
     /// `labels_path` must point to a WD14 `selected_tags.csv` with columns
@@ -96,7 +90,7 @@ impl OnnxTagger {
             "WD14 model loaded"
         );
 
-        Ok(OnnxTagger {
+        Ok(Wd14Tagger {
             session: Mutex::new(session),
             labels,
             general_threshold,
@@ -187,7 +181,7 @@ impl OnnxTagger {
         Ok(tensor)
     }
 
-    fn run_inference(&self, image_bytes: &[u8]) -> Result<Vec<TagPrediction>> {
+    pub fn tag(&self, image_bytes: &[u8]) -> Result<Vec<TagPrediction>> {
         let array = Self::preprocess(image_bytes)?;
 
         let mut session = self
@@ -252,9 +246,3 @@ impl OnnxTagger {
     }
 }
 
-#[async_trait]
-impl Tagger for OnnxTagger {
-    async fn tag_image(&self, image_bytes: &[u8]) -> Result<Vec<TagPrediction>> {
-        self.run_inference(image_bytes)
-    }
-}

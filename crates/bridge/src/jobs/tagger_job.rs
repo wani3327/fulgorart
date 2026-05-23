@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use fulgorart_db::{Db, TagJobWithKey};
 use fulgorart_storage::{R2Client, R2Config};
-use fulgorart_tagger::{OnnxTagger, Tagger};
+use fulgorart_tagger::Wd14Tagger;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -67,7 +67,7 @@ async fn mark_batch_failed(db: &Db, jobs: &[TagJobWithKey], message: &str) -> Re
 pub struct LocalTaggerJob {
     db: Db,
     r2: R2Client,
-    tagger: OnnxTagger,
+    tagger: Wd14Tagger,
     batch_size: usize,
 }
 
@@ -76,7 +76,7 @@ impl LocalTaggerJob {
         Ok(Self {
             db,
             r2: R2Client::new(&r2_config).await?,
-            tagger: OnnxTagger::from_env()?,
+            tagger: Wd14Tagger::from_env()?,
             batch_size: batch_size.max(1),
         })
     }
@@ -86,7 +86,7 @@ impl LocalTaggerJob {
         for raw_key in keys {
             let key = raw_key.strip_prefix("r2://").unwrap_or(raw_key);
             let bytes = self.r2.download(key).await?;
-            let tags = self.tagger.tag_image(&bytes).await?;
+            let tags = self.tagger.tag(&bytes)?;
             results.push(BridgeTagResult {
                 key: key.to_string(),
                 tags: tags

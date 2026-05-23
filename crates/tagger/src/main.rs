@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use fulgorart_storage::{R2Client, R2Config};
-use fulgorart_tagger::{OnnxTagger, Tagger, TagPrediction};
+use fulgorart_tagger::{Wd14Tagger, TagPrediction};
 use serde::Serialize;
 
 fn print_usage() {
@@ -89,13 +89,13 @@ fn parse_args() -> Result<CliMode> {
     }
 }
 
-async fn process_paths(tagger: &OnnxTagger, paths: &[String]) -> Result<usize> {
+async fn process_paths(tagger: &Wd14Tagger, paths: &[String]) -> Result<usize> {
     let mut total = 0usize;
     for path in paths {
         let bytes = tokio::fs::read(path)
             .await
             .with_context(|| format!("Failed to read image file: {}", path))?;
-        let tags = tagger.tag_image(&bytes).await?;
+        let tags = tagger.tag(&bytes)?;
         println!(
             "{}",
             serde_json::to_string(&PathTagResult {
@@ -120,12 +120,12 @@ async fn download_url(http: &reqwest::Client, url: &str) -> Result<Bytes> {
     response.bytes().await.context("Failed to read image body")
 }
 
-async fn process_urls(tagger: &OnnxTagger, urls: &[String]) -> Result<usize> {
+async fn process_urls(tagger: &Wd14Tagger, urls: &[String]) -> Result<usize> {
     let http = reqwest::Client::new();
     let mut total = 0usize;
     for url in urls {
         let bytes = download_url(&http, url).await?;
-        let tags = tagger.tag_image(&bytes).await?;
+        let tags = tagger.tag(&bytes)?;
         println!(
             "{}",
             serde_json::to_string(&UrlTagResult {
@@ -148,7 +148,7 @@ fn r2_config_from_env() -> Result<R2Config> {
     Ok(config)
 }
 
-async fn process_r2_keys(tagger: &OnnxTagger, keys: &[String]) -> Result<usize> {
+async fn process_r2_keys(tagger: &Wd14Tagger, keys: &[String]) -> Result<usize> {
     let r2_config = r2_config_from_env()?;
     let r2 = R2Client::new(&r2_config).await?;
     let mut total = 0usize;
@@ -157,7 +157,7 @@ async fn process_r2_keys(tagger: &OnnxTagger, keys: &[String]) -> Result<usize> 
         let key = raw_key.strip_prefix("r2://").unwrap_or(raw_key);
         tracing::debug!(%key, bucket = r2.bucket(), "Fetching image from R2");
         let bytes = r2.download(key).await?;
-        let tags = tagger.tag_image(&bytes).await?;
+        let tags: Vec<TagPrediction> = tagger.tag(&bytes)?;
         println!(
             "{}",
             serde_json::to_string(&R2TagResult {
@@ -180,7 +180,7 @@ async fn main() -> Result<()> {
         .try_init()
         .ok();
 
-    let tagger = OnnxTagger::from_env()?;
+    let tagger = Wd14Tagger::from_env()?;
     match parse_args()? {
         CliMode::LocalPaths(paths) => {
             let n = process_paths(&tagger, &paths).await?;
