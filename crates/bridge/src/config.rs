@@ -7,7 +7,6 @@ pub struct CloudRunConfig {
     pub project_id: String,
     pub region: String,
     pub job_name: String,
-    pub tagger_batch_size: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -39,12 +38,11 @@ impl BridgeConfig {
     }
 }
 
-pub fn cloud_run_config_from_env(tagger_batch_size: usize) -> Result<CloudRunConfig> {
+pub fn cloud_run_config_from_env() -> Result<CloudRunConfig> {
     dotenvy::dotenv().ok();
     Ok(CloudRunConfig {
         project_id: std::env::var("GCP_PROJECT_ID").context("GCP_PROJECT_ID is required")?,
         region: std::env::var("GCP_REGION").context("GCP_REGION is required")?,
         job_name: std::env::var("CLOUD_RUN_JOB_NAME").context("CLOUD_RUN_JOB_NAME is required")?,
-        tagger_batch_size,
     })
 }

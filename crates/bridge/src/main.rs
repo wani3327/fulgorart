@@ -1,16 +1,18 @@
 mod config;
-mod jobs;
+mod image_grabber;
+mod storage;
+mod tagger_job;
 
 use anyhow::Result;
+use std::collections::HashMap;
 
 use crate::config::{cloud_run_config_from_env, BridgeConfig};
-use crate::jobs::{
-    image_grabber::MyImageGrabJob,
-    storage::R2StorageJob,
-    tagger_job::{CloudRunTaggerJob, LocalTaggerJob},
-};
+use crate::image_grabber::MyImageGrabJob;
+use crate::storage::R2StorageJob;
+use crate::tagger_job::{BridgeTagPrediction, BridgeTagResult, CloudRunTaggerJob, LocalTaggerJob};
 
-use fulgorart_db::Db;
+use fulgorart_db::{Db, TagJobWithKey};
+use fulgorart_ingestor::GrabbedPost;
 use fulgorart_storage::R2Client;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,15 +53,158 @@ fn parse_mode_arg() -> Result<TaggerMode> {
     mode.ok_or_else(|| anyhow::anyhow!("--tagger-mode is required"))
 }
 
-async fn run_once(image_grabber: &MyImageGrabJob, storage: &R2StorageJob) -> Result<()> {
+async fn ingest_post(db: &Db, storage: &R2StorageJob, post: GrabbedPost) -> Result<usize> {
+    let post_row = db
+        .insert_post(
+            &post.source_type,
+            &post.source_post_id,
+            &post.source_post_url,
+            post.liked_at.as_deref(),
+            post.author_name.as_deref(),
+            post.author_id.as_deref(),
+            post.raw_json.as_deref(),
+        )
+        .await?;
+    let group_row = db.insert_image_group(Some(post_row.id)).await?;
+    let stored_images = storage.store_post(post).await?;
+
+    for image in &stored_images {
+        let asset = db
+            .insert_image_asset(
+                Some(post_row.id),
+                Some(group_row.id),
+                &image.sha256,
+                &image.r2_key,
+                &image.r2_url,
+                None,
+                None,
+                Some(image.file_size),
+                &image.content_type,
+                Some(&image.source_url),
+            )
+            .await?;
+        db.ensure_tag_job(asset.id).await?;
+    }
+
+    Ok(stored_images.len())
+}
+
+async fn run_ingest_once(
+    db: &Db,
+    image_grabber: &MyImageGrabJob,
+    storage: &R2StorageJob,
+) -> Result<()> {
     let posts = image_grabber.grab_liked_posts().await?;
     if posts.is_empty() {
         tracing::info!("Image grabber returned no liked posts");
         return Ok(());
     }
 
-    let stored = storage.store_posts(posts).await?;
+    let mut stored = 0usize;
+    for post in posts {
+        stored += ingest_post(db, storage, post).await?;
+    }
+
     tracing::info!(stored, "Stored grabbed images");
+    Ok(())
+}
+
+async fn apply_job_tags(db: &Db, job: &TagJobWithKey, tags: &[BridgeTagPrediction]) -> Result<()> {
+    for prediction in tags {
+        let tag = db
+            .get_or_create_tag(&prediction.name, prediction.category.as_deref())
+            .await?;
+        db.insert_image_tag(job.image_id, tag.id, "wd14", Some(prediction.score as f64))
+            .await?;
+    }
+    db.update_tag_job_status(job.job_id, "done", None).await?;
+    Ok(())
+}
+
+async fn mark_job_failed(db: &Db, job: &TagJobWithKey, message: &str) -> Result<()> {
+    db.update_tag_job_status(job.job_id, "failed", Some(message))
+        .await?;
+    Ok(())
+}
+
+async fn run_local_tagger(db: &Db, tagger: &LocalTaggerJob, batch_size: usize) -> Result<()> {
+    let batch_size = batch_size.max(1) as i64;
+
+    loop {
+        let jobs = db.get_pending_tag_jobs_with_keys(batch_size).await?;
+        if jobs.is_empty() {
+            tracing::info!("No pending tag jobs");
+            break;
+        }
+
+        for job in &jobs {
+            db.update_tag_job_status(job.job_id, "running", None)
+                .await?;
+        }
+
+        for job in &jobs {
+            match tagger.tag_r2_key(&job.r2_key).await {
+                Ok(tags) => apply_job_tags(db, job, &tags).await?,
+                Err(error) => {
+                    let message = format!("{error:#}");
+                    mark_job_failed(db, job, &message).await?;
+                }
+            }
+        }
+
+        if (jobs.len() as i64) < batch_size {
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+async fn run_cloud_tagger(db: &Db, tagger: &CloudRunTaggerJob, batch_size: usize) -> Result<()> {
+    let batch_size = batch_size.max(1) as i64;
+
+    loop {
+        let jobs = db.get_pending_tag_jobs_with_keys(batch_size).await?;
+        if jobs.is_empty() {
+            tracing::info!("No pending tag jobs");
+            break;
+        }
+
+        for job in &jobs {
+            db.update_tag_job_status(job.job_id, "running", None)
+                .await?;
+        }
+
+        let keys: Vec<String> = jobs.iter().map(|job| job.r2_key.clone()).collect();
+        match tagger.tag(&keys).await {
+            Ok(results) => {
+                let result_map: HashMap<&str, &BridgeTagResult> = results
+                    .iter()
+                    .map(|result| (result.key.as_str(), result))
+                    .collect();
+                for job in &jobs {
+                    match result_map.get(job.r2_key.as_str()) {
+                        Some(result) => apply_job_tags(db, job, &result.tags).await?,
+                        None => {
+                            let message = format!("No tag output found for R2 key: {}", job.r2_key);
+                            mark_job_failed(db, job, &message).await?;
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                let message = format!("{error:#}");
+                for job in &jobs {
+                    mark_job_failed(db, job, &message).await?;
+                }
+            }
+        }
+
+        if (jobs.len() as i64) < batch_size {
+            break;
+        }
+    }
+
     Ok(())
 }
 
@@ -84,19 +229,18 @@ async fn main() -> Result<()> {
     let r2 = R2Client::new(&config.r2).await?;
 
     let image_grabber = MyImageGrabJob::from_config(&config);
-    let storage = R2StorageJob::new(db.clone(), r2);
-    run_once(&image_grabber, &storage).await?;
+    let storage = R2StorageJob::new(r2);
+    run_ingest_once(&db, &image_grabber, &storage).await?;
 
     match tagger_mode {
         TaggerMode::CloudRun => {
-            let cloud_run_config = cloud_run_config_from_env(config.tagger_batch_size)?;
-            let tagger_job = CloudRunTaggerJob::new(db, cloud_run_config).await?;
-            tagger_job.tag().await?;
+            let cloud_run_config = cloud_run_config_from_env()?;
+            let tagger = CloudRunTaggerJob::new(cloud_run_config).await?;
+            run_cloud_tagger(&db, &tagger, config.tagger_batch_size).await?;
         }
         TaggerMode::Local => {
-            let tagger_job =
-                LocalTaggerJob::new(db, config.r2.clone(), config.tagger_batch_size).await?;
-            tagger_job.tag().await?;
+            let tagger = LocalTaggerJob::new(config.r2.clone()).await?;
+            run_local_tagger(&db, &tagger, config.tagger_batch_size).await?;
         }
     }
 

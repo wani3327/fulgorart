@@ -18,18 +18,11 @@ impl MyImageGrabJob {
             twitter: TwitterAdapter::new(config.twitter_bearer_token.as_deref().unwrap_or("")),
         }
     }
-}
 
-impl MyImageGrabJob {
     pub async fn grab_liked_posts(&self) -> Result<Vec<GrabbedPost>> {
         let mut posts = Vec::new();
-
-        let pixiv_posts = grab(&self.pixiv).await?;
-        posts.extend(pixiv_posts);
-
-        let twitter_posts = grab(&self.twitter).await?;
-        posts.extend(twitter_posts);
-
+        posts.extend(grab(&self.pixiv).await?);
+        posts.extend(grab(&self.twitter).await?);
         Ok(posts)
     }
 }
