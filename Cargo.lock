@@ -1255,7 +1255,6 @@ name = "fulgorart-bridge"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-trait",
  "dotenvy",
  "fulgorart-db",
  "fulgorart-ingestor",

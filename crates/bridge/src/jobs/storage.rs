@@ -1,11 +1,8 @@
 use anyhow::Result;
-use async_trait::async_trait;
 use fulgorart_db::Db;
 use fulgorart_ingestor::GrabbedPost;
 use fulgorart_storage::R2Client;
 use sha2::Digest;
-
-use fulgorart_bridge::StorageJob;
 
 pub struct R2StorageJob {
     db: Db,
@@ -18,9 +15,8 @@ impl R2StorageJob {
     }
 }
 
-#[async_trait]
-impl StorageJob for R2StorageJob {
-    async fn store_posts(&self, posts: Vec<GrabbedPost>) -> Result<usize> {
+impl R2StorageJob {
+    pub async fn store_posts(&self, posts: Vec<GrabbedPost>) -> Result<usize> {
         let mut stored_images = 0usize;
 
         for post in posts {

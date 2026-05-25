@@ -35,10 +35,9 @@ PIXIV_USER_ID=...                # optional; auto-resolved when omitted
 TWITTER_BEARER_TOKEN=...
 ```
 
-### Bridge tagging mode
+### Bridge tagging
 
 ```env
-TAGGER_JOB_MODE=cloud_run         # or local
 TAGGER_BATCH_SIZE=20
 ```
 
@@ -87,10 +86,12 @@ The binary saves files under `<output-dir>/<source_type>/<source_post_id>/`.
 
 ## Run the bridge app
 
-Grab liked images, upload to R2, persist DB rows, queue tag jobs, and execute the configured `TaggerJob` mode:
+Grab liked images, upload to R2, persist DB rows, queue tag jobs, and execute tagger jobs:
 
 ```bash
-cargo run --bin fulgorart-bridge
+cargo run --bin fulgorart-bridge -- --tagger-mode local
+# or
+cargo run --bin fulgorart-bridge -- --tagger-mode cloud_run
 # or
 make run-bridge
 ```

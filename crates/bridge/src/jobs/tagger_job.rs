@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use async_trait::async_trait;
 use fulgorart_db::{Db, TagJobWithKey};
 use fulgorart_storage::{R2Client, R2Config};
 use fulgorart_tagger::Wd14Tagger;
@@ -7,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use fulgorart_bridge::{CloudRunConfig, TaggerJob};
+use crate::config::CloudRunConfig;
 
 #[derive(Debug, Clone)]
 struct BridgeTagResult {
@@ -103,9 +102,8 @@ impl LocalTaggerJob {
     }
 }
 
-#[async_trait]
-impl TaggerJob for LocalTaggerJob {
-    async fn tag(&self) -> Result<()> {
+impl LocalTaggerJob {
+    pub async fn tag(&self) -> Result<()> {
         let batch_size = self.batch_size as i64;
 
         loop {
@@ -427,9 +425,8 @@ impl CloudRunTaggerJob {
     }
 }
 
-#[async_trait]
-impl TaggerJob for CloudRunTaggerJob {
-    async fn tag(&self) -> Result<()> {
+impl CloudRunTaggerJob {
+    pub async fn tag(&self) -> Result<()> {
         let batch_size = self.config.tagger_batch_size as i64;
 
         loop {
