@@ -1,8 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use fulgorart_core::AppConfig;
-use fulgorart_db::Db;
-use fulgorart_storage::R2Client;
+use fulgorart_db::{Db, DbConfig};
+use fulgorart_storage::{R2Client, R2Config};
 use image::GenericImageView;
 use sha2::Digest;
 
@@ -65,8 +64,9 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
-    let config = AppConfig::from_env()?;
-    let db = Db::connect(&config.db_path).await?;
+    let db_config = DbConfig::from_env();
+    let r2_config = R2Config::from_env();
+    let db = Db::connect(&db_config.path).await?;
 
     match cli.command {
         Commands::ImportImage {
@@ -105,13 +105,12 @@ async fn main() -> Result<()> {
                 Err(_) => (None, None),
             };
 
-            let r2 = R2Client::new(&config).await?;
+            let r2 = R2Client::new(&r2_config).await?;
             let key = R2Client::canonical_key(&source_type, &sha256, &ext);
-            let r2_url = r2.object_url(&config.r2_bucket, &key);
+            let r2_url = r2.object_url(&key);
 
             println!("Uploading {} -> {}", file, key);
-            r2.upload(&config.r2_bucket, &key, bytes, content_type)
-                .await?;
+            r2.upload(&key, bytes, content_type).await?;
 
             let post = db
                 .insert_post(
@@ -144,7 +143,7 @@ async fn main() -> Result<()> {
             println!("Imported image id={} sha256={}", asset.id, sha256);
             println!("R2 URL: {}", r2_url);
 
-            let job = db.insert_tag_job(asset.id).await?;
+            let job = db.ensure_tag_job(asset.id).await?;
             println!("Tag job queued: id={}", job.id);
         }
 

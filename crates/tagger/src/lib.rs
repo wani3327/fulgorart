@@ -1,7 +1,7 @@
+mod config;
+
 use anyhow::{Context, Result};
-use async_trait::async_trait;
-use bytes::Bytes;
-use fulgorart_storage::R2Client;
+pub use config::TaggerConfig;
 use ndarray::Array4;
 use ort::{
     session::{builder::GraphOptimizationLevel, Session},
@@ -20,23 +20,6 @@ pub struct TagPrediction {
     pub category: Option<String>,
     pub score: f32,
 }
-
-#[async_trait]
-pub trait Tagger: Send + Sync {
-    async fn tag_image(&self, image_bytes: &[u8]) -> Result<Vec<TagPrediction>>;
-}
-
-// ─── Worker trait ─────────────────────────────────────────────────────────────
-
-/// Common interface for all tagger workers.
-/// Each worker receives a list of string inputs (file paths, URLs, or R2 object
-/// keys) and returns the number of successfully processed items.
-#[async_trait]
-pub trait TaggerWorker: Send + Sync {
-    async fn run(&self, inputs: &[String]) -> Result<usize>;
-}
-
-// ─── Label entry loaded from selected_tags.csv ────────────────────────────────
 
 #[derive(Debug, Clone)]
 struct LabelEntry {
@@ -59,15 +42,13 @@ impl LabelEntry {
     }
 }
 
-// ─── OnnxTagger ───────────────────────────────────────────────────────────────
-
 /// WD14 tagger backed by an ONNX model via `ort`.
 ///
 /// At runtime, `libonnxruntime.so` (or `onnxruntime.dll` on Windows) must be
 /// on `LD_LIBRARY_PATH` / `PATH`.  Download the appropriate ONNX Runtime
 /// release from <https://github.com/microsoft/onnxruntime/releases> and place
 /// it next to the binary or in a system library path.
-pub struct OnnxTagger {
+pub struct Wd14Tagger {
     session: Mutex<Session>,
     /// All tag labels including the leading rating rows.
     labels: Vec<LabelEntry>,
@@ -79,7 +60,7 @@ pub struct OnnxTagger {
     rating_count: usize,
 }
 
-impl OnnxTagger {
+impl Wd14Tagger {
     /// Load the ONNX model and the labels CSV.
     ///
     /// `labels_path` must point to a WD14 `selected_tags.csv` with columns
@@ -109,13 +90,23 @@ impl OnnxTagger {
             "WD14 model loaded"
         );
 
-        Ok(OnnxTagger {
+        Ok(Wd14Tagger {
             session: Mutex::new(session),
             labels,
             general_threshold,
             character_threshold,
             rating_count,
         })
+    }
+
+    pub fn from_env() -> Result<Self> {
+        let config = config::TaggerConfig::from_env();
+        Self::new(
+            &config.model_path,
+            &config.labels_path,
+            config.general_threshold,
+            config.character_threshold,
+        )
     }
 
     /// Parse `selected_tags.csv`.  Returns `(labels, rating_count)`.
@@ -144,9 +135,9 @@ impl OnnxTagger {
         // The first N rows where the name starts with "rating:" are the rating
         // pseudo-tags that have no useful threshold semantics.
         let rating_count = 4; /* all
-            .iter()
-            .take_while(|e| e.name.starts_with("rating:"))
-            .count(); */
+                              .iter()
+                              .take_while(|e| e.name.starts_with("rating:"))
+                              .count(); */
 
         Ok((all, rating_count))
     }
@@ -189,11 +180,8 @@ impl OnnxTagger {
         }
         Ok(tensor)
     }
-}
 
-#[async_trait]
-impl Tagger for OnnxTagger {
-    async fn tag_image(&self, image_bytes: &[u8]) -> Result<Vec<TagPrediction>> {
+    pub fn tag(&self, image_bytes: &[u8]) -> Result<Vec<TagPrediction>> {
         let array = Self::preprocess(image_bytes)?;
 
         let mut session = self
@@ -258,197 +246,3 @@ impl Tagger for OnnxTagger {
     }
 }
 
-// ─── Entry point ──────────────────────────────────────────────────────────────
-
-fn init() -> Result<OnnxTagger> {
-    dotenvy::dotenv().ok();
-
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .init();
-
-    let config = fulgorart_core::AppConfig::from_env()?;
-    let tagger = OnnxTagger::new(
-        &config.wd14_model_path,
-        &config.wd14_labels_path,
-        config.wd14_general_threshold,
-        config.wd14_character_threshold,
-    )?;
-    Ok(tagger)
-}
-
-// ─── LocalPathTaggerWorker ────────────────────────────────────────────────────
-
-#[derive(Serialize)]
-struct PathTagResult {
-    path: String,
-    tags: Vec<TagPrediction>,
-}
-
-/// CLI-triggered worker: tags explicitly provided local file paths and exits.
-pub struct LocalPathTaggerWorker {
-    pub tagger: Box<dyn Tagger>,
-}
-
-impl LocalPathTaggerWorker {
-    pub fn new(tagger: Box<dyn Tagger>) -> Self {
-        LocalPathTaggerWorker { tagger }
-    }
-}
-
-#[async_trait]
-impl TaggerWorker for LocalPathTaggerWorker {
-    async fn run(&self, inputs: &[String]) -> Result<usize> {
-        let mut total = 0usize;
-        for path in inputs {
-            let bytes = tokio::fs::read(path)
-                .await
-                .with_context(|| format!("Failed to read image file: {}", path))?;
-            let predictions = self.tagger.tag_image(&bytes).await?;
-
-            let result = PathTagResult {
-                path: path.to_string(),
-                tags: predictions,
-            };
-
-            println!("{}", serde_json::to_string(&result)?);
-            total += 1;
-        }
-        Ok(total)
-    }
-}
-
-pub async fn run_for_paths(paths: &[String]) -> Result<usize> {
-    let tagger = init()?;
-
-    let worker = LocalPathTaggerWorker::new(Box::new(tagger));
-    let n = worker.run(paths).await?;
-    tracing::info!("Tagger: processed {} local file(s)", n);
-    Ok(n)
-}
-
-// ─── UrlTaggerWorker ──────────────────────────────────────────────────────────
-
-#[derive(Serialize)]
-struct UrlTagResult {
-    url: String,
-    tags: Vec<TagPrediction>,
-}
-
-/// CLI-triggered worker: downloads images from URLs and tags them, then exits.
-pub struct UrlTaggerWorker {
-    pub tagger: Box<dyn Tagger>,
-    pub http: reqwest::Client,
-}
-
-impl UrlTaggerWorker {
-    pub fn new(tagger: Box<dyn Tagger>) -> Self {
-        UrlTaggerWorker {
-            tagger,
-            http: reqwest::Client::new(),
-        }
-    }
-
-    async fn download(&self, url: &str) -> Result<Bytes> {
-        tracing::debug!(%url, "Downloading image from URL");
-        let response = self
-            .http
-            .get(url)
-            .send()
-            .await
-            .context("HTTP request failed")?
-            .error_for_status()
-            .context("HTTP error status")?;
-        response.bytes().await.context("Failed to read image body")
-    }
-}
-
-#[async_trait]
-impl TaggerWorker for UrlTaggerWorker {
-    async fn run(&self, inputs: &[String]) -> Result<usize> {
-        let mut total = 0usize;
-        for url in inputs {
-            let bytes = self.download(url).await?;
-            let predictions = self.tagger.tag_image(&bytes).await?;
-
-            let result = UrlTagResult {
-                url: url.clone(),
-                tags: predictions,
-            };
-
-            println!("{}", serde_json::to_string(&result)?);
-            total += 1;
-        }
-        Ok(total)
-    }
-}
-
-pub async fn run_for_urls(urls: &[String]) -> Result<usize> {
-    let tagger = init()?;
-
-    let worker = UrlTaggerWorker::new(Box::new(tagger));
-    let n = worker.run(urls).await?;
-    tracing::info!("Tagger: processed {} image(s) from URLs", n);
-    Ok(n)
-}
-
-// ─── R2TaggerWorker ───────────────────────────────────────────────────────────
-
-#[derive(Serialize)]
-struct R2TagResult {
-    key: String,
-    tags: Vec<TagPrediction>,
-}
-
-/// Worker that fetches images from a Cloudflare R2 bucket and tags them.
-///
-/// Each input string is an R2 object key (with an optional `r2://` prefix that
-/// will be stripped automatically).
-pub struct R2TaggerWorker {
-    pub tagger: Box<dyn Tagger>,
-    pub r2: R2Client,
-    pub bucket: String,
-}
-
-impl R2TaggerWorker {
-    pub fn new(tagger: Box<dyn Tagger>, r2: R2Client, bucket: String) -> Self {
-        R2TaggerWorker { tagger, r2, bucket }
-    }
-}
-
-#[async_trait]
-impl TaggerWorker for R2TaggerWorker {
-    async fn run(&self, inputs: &[String]) -> Result<usize> {
-        let mut total = 0usize;
-        for raw_key in inputs {
-            let key = raw_key.strip_prefix("r2://").unwrap_or(raw_key);
-            tracing::debug!(%key, bucket = %self.bucket, "Fetching image from R2");
-
-            let bytes = self.r2.download(&self.bucket, key).await?;
-            let predictions = self.tagger.tag_image(&bytes).await?;
-
-            let result = R2TagResult {
-                key: key.to_string(),
-                tags: predictions,
-            };
-
-            println!("{}", serde_json::to_string(&result)?);
-            total += 1;
-        }
-        Ok(total)
-    }
-}
-
-pub async fn run_for_r2_keys(keys: &[String]) -> Result<usize> {
-    let tagger = init()?;
-    let config = fulgorart_core::AppConfig::from_env()?;
-    let r2 = R2Client::new(&config).await?;
-    let bucket = config.r2_bucket.clone();
-
-    let worker = R2TaggerWorker::new(Box::new(tagger), r2, bucket);
-    let n = worker.run(keys).await?;
-    tracing::info!("Tagger: processed {} image(s) from R2", n);
-    Ok(n)
-}

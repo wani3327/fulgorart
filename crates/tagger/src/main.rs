@@ -1,4 +1,8 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
+use bytes::Bytes;
+use fulgorart_storage::{R2Client, R2Config};
+use fulgorart_tagger::{Wd14Tagger, TagPrediction};
+use serde::Serialize;
 
 fn print_usage() {
     eprintln!("Usage:");
@@ -24,6 +28,24 @@ enum CliMode {
     R2Keys(Vec<String>),
 }
 
+#[derive(Serialize)]
+struct PathTagResult {
+    path: String,
+    tags: Vec<TagPrediction>,
+}
+
+#[derive(Serialize)]
+struct UrlTagResult {
+    url: String,
+    tags: Vec<TagPrediction>,
+}
+
+#[derive(Serialize)]
+struct R2TagResult {
+    key: String,
+    tags: Vec<TagPrediction>,
+}
+
 fn parse_args() -> Result<CliMode> {
     let mut args = std::env::args().skip(1).peekable();
     if args.peek().is_none() {
@@ -32,7 +54,7 @@ fn parse_args() -> Result<CliMode> {
     }
 
     let mut items: Vec<String> = Vec::new();
-    while let Some(arg) = args.next() {
+    for arg in args {
         match arg.as_str() {
             "-h" | "--help" => {
                 print_usage();
@@ -52,7 +74,6 @@ fn parse_args() -> Result<CliMode> {
         std::process::exit(1);
     }
 
-    // All arguments must be the same kind (all URLs, all R2 keys, or all local paths).
     let all_urls = items.iter().all(|s| is_url(s));
     let all_r2 = items.iter().all(|s| is_r2_key(s));
     let all_paths = items.iter().all(|s| !is_url(s) && !is_r2_key(s));
@@ -68,18 +89,110 @@ fn parse_args() -> Result<CliMode> {
     }
 }
 
-/// Tag images provided as local file paths, URLs, or Cloudflare R2 object keys, then exit.
+async fn process_paths(tagger: &Wd14Tagger, paths: &[String]) -> Result<usize> {
+    let mut total = 0usize;
+    for path in paths {
+        let bytes = tokio::fs::read(path)
+            .await
+            .with_context(|| format!("Failed to read image file: {}", path))?;
+        let tags = tagger.tag(&bytes)?;
+        println!(
+            "{}",
+            serde_json::to_string(&PathTagResult {
+                path: path.clone(),
+                tags,
+            })?
+        );
+        total += 1;
+    }
+    Ok(total)
+}
+
+async fn download_url(http: &reqwest::Client, url: &str) -> Result<Bytes> {
+    tracing::debug!(%url, "Downloading image from URL");
+    let response = http
+        .get(url)
+        .send()
+        .await
+        .context("HTTP request failed")?
+        .error_for_status()
+        .context("HTTP error status")?;
+    response.bytes().await.context("Failed to read image body")
+}
+
+async fn process_urls(tagger: &Wd14Tagger, urls: &[String]) -> Result<usize> {
+    let http = reqwest::Client::new();
+    let mut total = 0usize;
+    for url in urls {
+        let bytes = download_url(&http, url).await?;
+        let tags = tagger.tag(&bytes)?;
+        println!(
+            "{}",
+            serde_json::to_string(&UrlTagResult {
+                url: url.clone(),
+                tags,
+            })?
+        );
+        total += 1;
+    }
+    Ok(total)
+}
+
+fn r2_config_from_env() -> Result<R2Config> {
+    let config = R2Config::from_env();
+    if config.access_key_id.is_empty() || config.secret_access_key.is_empty() {
+        anyhow::bail!(
+            "FULGORART_R2_ACCESS_KEY_ID and FULGORART_R2_SECRET_ACCESS_KEY are required for R2 mode"
+        );
+    }
+    Ok(config)
+}
+
+async fn process_r2_keys(tagger: &Wd14Tagger, keys: &[String]) -> Result<usize> {
+    let r2_config = r2_config_from_env()?;
+    let r2 = R2Client::new(&r2_config).await?;
+    let mut total = 0usize;
+
+    for raw_key in keys {
+        let key = raw_key.strip_prefix("r2://").unwrap_or(raw_key);
+        tracing::debug!(%key, bucket = r2.bucket(), "Fetching image from R2");
+        let bytes = r2.download(key).await?;
+        let tags: Vec<TagPrediction> = tagger.tag(&bytes)?;
+        println!(
+            "{}",
+            serde_json::to_string(&R2TagResult {
+                key: key.to_string(),
+                tags,
+            })?
+        );
+        total += 1;
+    }
+
+    Ok(total)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .try_init()
+        .ok();
+
+    let tagger = Wd14Tagger::from_env()?;
     match parse_args()? {
         CliMode::LocalPaths(paths) => {
-            fulgorart_tagger::run_for_paths(&paths).await?;
+            let n = process_paths(&tagger, &paths).await?;
+            tracing::info!(processed = n, "Tagger processed local file(s)");
         }
         CliMode::Urls(urls) => {
-            fulgorart_tagger::run_for_urls(&urls).await?;
+            let n = process_urls(&tagger, &urls).await?;
+            tracing::info!(processed = n, "Tagger processed URL image(s)");
         }
         CliMode::R2Keys(keys) => {
-            fulgorart_tagger::run_for_r2_keys(&keys).await?;
+            let n = process_r2_keys(&tagger, &keys).await?;
+            tracing::info!(processed = n, "Tagger processed R2 image(s)");
         }
     }
     Ok(())

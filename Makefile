@@ -48,7 +48,7 @@ run-ingestor:
 	cargo run --bin fulgorart-ingestor
 
 run-bridge:
-	GOOGLE_APPLICATION_CREDENTIALS=development-493004-1f72f74562c7.json cargo run --bin fulgorart-bridge
+	GOOGLE_APPLICATION_CREDENTIALS=development-493004-1f72f74562c7.json cargo run --bin fulgorart-bridge -- --tagger-mode cloud_run
 
 docker-build-tagger:
 	docker build -f crates/tagger/Dockerfile -t $(TAGGER_IMAGE) .

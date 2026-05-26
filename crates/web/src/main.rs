@@ -7,18 +7,32 @@ use axum::{
     Router,
 };
 use base64::Engine;
-use fulgorart_core::AppConfig;
-use fulgorart_db::{Db, ImageAssetRow, TagRow};
-use fulgorart_storage::R2Client;
+use fulgorart_db::{Db, DbConfig, ImageAssetRow, TagRow};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use tracing::instrument;
+
+#[derive(Debug, Clone)]
+struct WebConfig {
+    password: Option<String>,
+    port: u16,
+}
+
+impl WebConfig {
+    fn from_env() -> Self {
+        dotenvy::dotenv().ok();
+        Self {
+            password: std::env::var("FULGORART_PASSWORD").ok(),
+            port: std::env::var("FULGORART_PORT")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(3000),
+        }
+    }
+}
 
 #[derive(Clone)]
 struct AppState {
     db: Db,
-    r2: Arc<R2Client>,
-    config: Arc<AppConfig>,
+    config: WebConfig,
 }
 
 async fn check_auth(
@@ -55,13 +69,6 @@ async fn check_auth(
     }
 }
 
-#[allow(dead_code)]
-#[derive(Deserialize)]
-struct Pagination {
-    page: Option<i64>,
-    per_page: Option<i64>,
-}
-
 #[derive(Deserialize)]
 struct TagFilterQuery {
     page: Option<i64>,
@@ -82,7 +89,6 @@ struct ImageWithTags {
     tags: Vec<TagRow>,
 }
 
-#[instrument(skip(state))]
 async fn get_index(State(state): State<AppState>) -> Html<String> {
     let images = state.db.list_image_assets(1, 50).await.unwrap_or_default();
     let mut cards = String::new();
@@ -121,7 +127,6 @@ a {{ color: #aef; }}
     ))
 }
 
-#[instrument(skip(state))]
 async fn get_image_page(
     State(state): State<AppState>,
     Path(id): Path<i64>,
@@ -134,13 +139,12 @@ async fn get_image_page(
         .ok_or(StatusCode::NOT_FOUND)?;
 
     let tags = state.db.get_image_tags(id).await.unwrap_or_default();
-
     let tag_list = tags
         .iter()
-        .map(|t| {
+        .map(|tag| {
             format!(
                 r#"<span class="tag" data-id="{}">{} <button onclick="removeTag({},{})">×</button></span>"#,
-                t.id, t.name, id, t.id
+                tag.id, tag.name, id, tag.id
             )
         })
         .collect::<Vec<_>>()
@@ -205,12 +209,12 @@ async fn api_list_images(
     let include: Vec<String> = q
         .include
         .as_deref()
-        .map(|s| s.split(',').map(str::to_string).collect())
+        .map(|value| value.split(',').map(str::to_string).collect::<Vec<_>>())
         .unwrap_or_default();
     let exclude: Vec<String> = q
         .exclude
         .as_deref()
-        .map(|s| s.split(',').map(str::to_string).collect())
+        .map(|value| value.split(',').map(str::to_string).collect::<Vec<_>>())
         .unwrap_or_default();
 
     let assets = state
@@ -299,16 +303,14 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let config = AppConfig::from_env()?;
-    let db = Db::connect(&config.db_path).await?;
-    let r2 = R2Client::new(&config).await?;
+    let db_config = DbConfig::from_env();
+    let config = WebConfig::from_env();
+    let db = Db::connect(&db_config.path).await?;
 
     let state = AppState {
         db,
-        r2: Arc::new(r2),
-        config: Arc::new(config.clone()),
+        config: config.clone(),
     };
-
     let app = Router::new()
         .route("/", get(get_index))
         .route("/image/:id", get(get_image_page))

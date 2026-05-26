@@ -1,500 +1,116 @@
-use anyhow::{Context, Result};
-use async_trait::async_trait;
-use bytes::Bytes;
-use fulgorart_core::AppConfig;
-use fulgorart_db::{Db, ImageAssetRow};
-use fulgorart_storage::R2Client;
-use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
-use tracing::instrument;
+mod adapters;
+mod config;
+mod model;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SourcePost {
-    pub source_type: String,
-    pub source_post_id: String,
-    pub source_post_url: String,
-    pub liked_at: Option<String>,
-    pub author_name: Option<String>,
-    pub author_id: Option<String>,
-    pub image_urls: Vec<String>,
-    pub raw_json: Option<String>,
-}
+pub use adapters::{PixivAdapter, SourceAdapter, TwitterAdapter};
+pub use config::IngestorConfig;
+pub use model::{GrabbedImage, GrabbedPost, SourcePost};
 
-#[async_trait]
-pub trait SourceAdapter: Send + Sync {
-    fn source_type(&self) -> &str;
-    async fn fetch_liked_posts(&self, since: Option<&str>) -> Result<Vec<SourcePost>>;
-    async fn download_image(&self, url: &str) -> Result<(Bytes, String)>;
-}
+use anyhow::Result;
+use std::path::Path;
 
-/// Pixiv adapter stub.
-/// TODO: Implement Pixiv API calls using OAuth + pixiv API endpoints.
-pub struct PixivAdapter {
-    pub access_token: String,
-    client: reqwest::Client,
-}
+/// Grabs liked posts from different sources. SourcePost(adapter) -> GrabbedPost
+/// 실제로 하는 일: download_image를 불러서 이미지를 Bytes 형식으로 메모리에 올림.
+pub async fn grab<T: SourceAdapter + ?Sized>(adapter: &T) -> Result<Vec<GrabbedPost>> {
+    let mut grabbed_posts = Vec::new();
 
-#[derive(Debug, Deserialize, Serialize)]
-struct PixivUserMeResponse {
-    user: PixivUser,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct PixivUser {
-    id: PixivId,
-    name: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(untagged)]
-enum PixivId {
-    String(String),
-    Number(u64),
-}
-
-impl std::fmt::Display for PixivId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PixivId::String(v) => f.write_str(v),
-            PixivId::Number(v) => write!(f, "{v}"),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct PixivBookmarksResponse {
-    #[serde(default)]
-    illusts: Vec<PixivIllust>,
-    next_url: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct PixivIllust {
-    id: u64,
-    user: Option<PixivUser>,
-    create_date: Option<String>,
-    bookmark_date: Option<String>,
-    #[serde(rename = "bookmark_data")]
-    bookmark_metadata: Option<PixivBookmarkData>,
-    meta_single_page: Option<PixivMetaSinglePage>,
-    #[serde(default)]
-    meta_pages: Vec<PixivMetaPage>,
-    image_urls: Option<PixivImageUrls>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct PixivBookmarkData {
-    date: Option<String>,
-    created_at: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct PixivMetaSinglePage {
-    original_image_url: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct PixivMetaPage {
-    image_urls: Option<PixivImageUrls>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct PixivImageUrls {
-    original: Option<String>,
-    large: Option<String>,
-    medium: Option<String>,
-}
-
-impl PixivAdapter {
-    pub fn new(access_token: &str) -> Self {
-        PixivAdapter {
-            access_token: access_token.to_string(),
-            client: reqwest::Client::new(),
-        }
-    }
-
-    fn request_builder(&self, url: &str) -> reqwest::RequestBuilder {
-        self.client
-            .get(url)
-            .bearer_auth(&self.access_token)
-            .header("User-Agent", "fulgorart-ingestor/0.1")
-    }
-
-    async fn resolve_user_id(&self) -> Result<String> {
-        if let Ok(user_id) = std::env::var("PIXIV_USER_ID") {
-            let user_id = user_id.trim();
-            if !user_id.is_empty() {
-                return Ok(user_id.to_string());
-            }
-        }
-
-        let me: PixivUserMeResponse = self
-            .request_builder("https://app-api.pixiv.net/v2/user/me")
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await
-            .context("Failed to parse Pixiv /v2/user/me response")?;
-
-        Ok(me.user.id.to_string())
-    }
-
-    fn parse_since(since: Option<&str>) -> Option<chrono::DateTime<chrono::FixedOffset>> {
-        since.and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-    }
-
-    fn is_since_included(
-        since: Option<&chrono::DateTime<chrono::FixedOffset>>,
-        liked_at: Option<&str>,
-    ) -> bool {
-        let Some(since_ts) = since else {
-            return true;
-        };
-        let Some(liked_at) = liked_at else {
-            return true;
-        };
-        chrono::DateTime::parse_from_rfc3339(liked_at)
-            .map(|ts| ts >= *since_ts)
-            .unwrap_or(true)
-    }
-
-    fn extract_image_urls(illust: &PixivIllust) -> Vec<String> {
-        let mut urls = Vec::new();
-
-        if !illust.meta_pages.is_empty() {
-            for page in &illust.meta_pages {
-                if let Some(image_urls) = &page.image_urls {
-                    if let Some(url) = image_urls
-                        .original
-                        .as_deref()
-                        .or(image_urls.large.as_deref())
-                        .or(image_urls.medium.as_deref())
-                    {
-                        urls.push(url.to_string());
-                    }
-                }
-            }
-        } else if let Some(url) = illust
-            .meta_single_page
-            .as_ref()
-            .and_then(|single| single.original_image_url.as_deref())
-        {
-            urls.push(url.to_string());
-        } else if let Some(image_urls) = &illust.image_urls {
-            if let Some(url) = image_urls
-                .original
-                .as_deref()
-                .or(image_urls.large.as_deref())
-                .or(image_urls.medium.as_deref())
-            {
-                urls.push(url.to_string());
-            }
-        }
-
-        let mut seen_urls = HashSet::new();
-        urls.into_iter()
-            .filter(|url| seen_urls.insert(url.clone()))
-            .collect()
-    }
-
-    fn extract_liked_at(illust: &PixivIllust) -> Option<String> {
-        illust
-            .bookmark_date
-            .clone()
-            .or_else(|| {
-                illust
-                    .bookmark_metadata
-                    .as_ref()
-                    .and_then(|data| data.date.clone())
-            })
-            .or_else(|| {
-                illust
-                    .bookmark_metadata
-                    .as_ref()
-                    .and_then(|data| data.created_at.clone())
-            })
-            .or_else(|| illust.create_date.clone())
-    }
-}
-
-#[async_trait]
-impl SourceAdapter for PixivAdapter {
-    fn source_type(&self) -> &str {
-        "pixiv"
-    }
-
-    async fn fetch_liked_posts(&self, since: Option<&str>) -> Result<Vec<SourcePost>> {
-        let user_id = self.resolve_user_id().await?;
-        let mut next_url = Some(format!(
-            "https://app-api.pixiv.net/v1/user/bookmarks/illust?user_id={user_id}&restrict=public"
-        ));
-        let mut posts = Vec::new();
-        let mut seen_post_ids = HashSet::new();
-        let since_ts = Self::parse_since(since);
-
-        while let Some(url) = next_url.take() {
-            let response: PixivBookmarksResponse = self
-                .request_builder(&url)
-                .send()
-                .await?
-                .error_for_status()?
-                .json()
-                .await
-                .with_context(|| format!("Failed to parse Pixiv bookmarks response: {url}"))?;
-
-            let PixivBookmarksResponse {
-                illusts,
-                next_url: new_next_url,
-            } = response;
-
-            for illust in illusts {
-                let source_post_id = illust.id.to_string();
-                if !seen_post_ids.insert(source_post_id.clone()) {
-                    continue;
-                }
-
-                let liked_at = Self::extract_liked_at(&illust);
-                if !Self::is_since_included(since_ts.as_ref(), liked_at.as_deref()) {
-                    continue;
-                }
-
-                let image_urls = Self::extract_image_urls(&illust);
-                if image_urls.is_empty() {
-                    continue;
-                }
-
-                let raw_json = serde_json::to_string(&illust).ok();
-                let (author_name, author_id) = illust
-                    .user
-                    .as_ref()
-                    .map(|u| (u.name.clone(), Some(u.id.to_string())))
-                    .unwrap_or((None, None));
-
-                posts.push(SourcePost {
-                    source_type: self.source_type().to_string(),
-                    source_post_id: source_post_id.clone(),
-                    source_post_url: format!("https://www.pixiv.net/artworks/{source_post_id}"),
-                    liked_at,
-                    author_name,
-                    author_id,
-                    image_urls,
-                    raw_json,
-                });
-            }
-
-            next_url = new_next_url;
-        }
-
-        Ok(posts)
-    }
-
-    async fn download_image(&self, url: &str) -> Result<(Bytes, String)> {
-        let resp = self
-            .client
-            .get(url)
-            .bearer_auth(&self.access_token)
-            .header("Referer", "https://www.pixiv.net/")
-            .send()
-            .await?
-            .error_for_status()?;
-        let content_type = resp
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("image/jpeg")
-            .to_string();
-        let data = resp.bytes().await?;
-        Ok((data, content_type))
-    }
-}
-
-/// Twitter/X adapter stub.
-pub struct TwitterAdapter {
-    pub bearer_token: String,
-    client: reqwest::Client,
-}
-
-impl TwitterAdapter {
-    pub fn new(bearer_token: &str) -> Self {
-        TwitterAdapter {
-            bearer_token: bearer_token.to_string(),
-            client: reqwest::Client::new(),
-        }
-    }
-}
-
-#[async_trait]
-impl SourceAdapter for TwitterAdapter {
-    fn source_type(&self) -> &str {
-        "twitter"
-    }
-
-    async fn fetch_liked_posts(&self, _since: Option<&str>) -> Result<Vec<SourcePost>> {
-        // TODO: Implement Twitter v2 liked tweets API
-        tracing::warn!("TwitterAdapter::fetch_liked_posts is a stub");
-        Ok(vec![])
-    }
-
-    async fn download_image(&self, url: &str) -> Result<(Bytes, String)> {
-        let resp = self
-            .client
-            .get(url)
-            .bearer_auth(&self.bearer_token)
-            .send()
-            .await?;
-        let content_type = resp
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("image/jpeg")
-            .to_string();
-        let data = resp.bytes().await?;
-        Ok((data, content_type))
-    }
-}
-
-pub struct IngestorService {
-    db: Db,
-    r2: R2Client,
-    config: AppConfig,
-}
-
-impl IngestorService {
-    pub fn new(db: Db, r2: R2Client, config: AppConfig) -> Self {
-        IngestorService { db, r2, config }
-    }
-
-    #[instrument(skip(self, adapter, image_bytes))]
-    pub async fn ingest_image(
-        &self,
-        adapter: &dyn SourceAdapter,
-        post_id: i64,
-        group_id: i64,
-        image_bytes: Bytes,
-        content_type: &str,
-        source_url: &str,
-    ) -> Result<ImageAssetRow> {
-        use sha2::Digest;
-        let sha256 = {
-            let mut hasher = sha2::Sha256::new();
-            hasher.update(&image_bytes);
-            hex::encode(hasher.finalize())
-        };
-
-        let ext = match content_type {
-            "image/png" => "png",
-            "image/gif" => "gif",
-            "image/webp" => "webp",
-            _ => "jpg",
-        };
-
-        let key = R2Client::canonical_key(adapter.source_type(), &sha256, ext);
-        let r2_url = self.r2.object_url(&self.config.r2_bucket, &key);
-
-        self.r2
-            .upload(
-                &self.config.r2_bucket,
-                &key,
-                image_bytes.clone(),
+    let posts = adapter.fetch_liked_posts(None).await?;
+    for post in posts {
+        let mut images = Vec::new();
+        for image_url in &post.image_urls {
+            let (bytes, content_type) = adapter.download_image(image_url).await?;
+            images.push(GrabbedImage {
+                source_url: image_url.clone(),
                 content_type,
-            )
-            .await?;
-
-        let asset = self
-            .db
-            .insert_image_asset(
-                Some(post_id),
-                Some(group_id),
-                &sha256,
-                &key,
-                &r2_url,
-                None,
-                None,
-                Some(image_bytes.len() as i64),
-                content_type,
-                Some(source_url),
-            )
-            .await?;
-
-        self.db.insert_tag_job(asset.id).await?;
-
-        Ok(asset)
-    }
-
-    pub async fn run_adapter(&self, adapter: &dyn SourceAdapter) -> Result<usize> {
-        let posts = adapter.fetch_liked_posts(None).await?;
-        let mut count = 0;
-        for post in posts {
-            let post_row = self
-                .db
-                .insert_post(
-                    &post.source_type,
-                    &post.source_post_id,
-                    &post.source_post_url,
-                    post.liked_at.as_deref(),
-                    post.author_name.as_deref(),
-                    post.author_id.as_deref(),
-                    post.raw_json.as_deref(),
-                )
-                .await?;
-            let group_row = self.db.insert_image_group(Some(post_row.id)).await?;
-
-            for image_url in &post.image_urls {
-                let (data, content_type) = adapter.download_image(image_url).await?;
-                self.ingest_image(
-                    adapter,
-                    post_row.id,
-                    group_row.id,
-                    data,
-                    &content_type,
-                    image_url,
-                )
-                .await?;
-                count += 1;
-            }
+                bytes,
+            });
         }
-        Ok(count)
+
+        if !images.is_empty() {
+            grabbed_posts.push(GrabbedPost {
+                source_type: post.source_type,
+                source_post_id: post.source_post_id,
+                source_post_url: post.source_post_url,
+                liked_at: post.liked_at,
+                author_name: post.author_name,
+                author_id: post.author_id,
+                raw_json: post.raw_json,
+                images,
+            });
+        }
     }
+
+    Ok(grabbed_posts)
 }
 
-pub async fn run() -> Result<()> {
-    dotenvy::dotenv().ok();
+pub async fn run_to_directory(config: &IngestorConfig, output_dir: &Path) -> Result<usize> {
+    let adapters = config.build_adapters();
+    if adapters.is_empty() {
+        tracing::warn!(
+            "No adapter credentials found (PIXIV_ACCESS_TOKEN / TWITTER_BEARER_TOKEN). Nothing to do."
+        );
+        return Ok(0);
+    }
 
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
-        .init();
+        .try_init()
+        .ok();
 
-    let config = AppConfig::from_env()?;
-    let db = Db::connect(&config.db_path).await?;
-    let r2 = R2Client::new(&config).await?;
+    let mut posts = Vec::new();
 
-    let service = IngestorService::new(db, r2, config);
-
-    let pixiv_token = std::env::var("PIXIV_ACCESS_TOKEN").ok();
-    let twitter_token = std::env::var("TWITTER_BEARER_TOKEN").ok();
-
-    if pixiv_token.is_none() && twitter_token.is_none() {
-        tracing::warn!(
-            "No adapter credentials found \
-             (PIXIV_ACCESS_TOKEN / TWITTER_BEARER_TOKEN). Nothing to do."
-        );
-        return Ok(());
+    for adapter in adapters {
+        posts.extend(grab(adapter.as_ref()).await?);
     }
 
-    if let Some(ref token) = pixiv_token {
-        let adapter = PixivAdapter::new(token);
-        let n = service.run_adapter(&adapter).await?;
-        tracing::info!("Pixiv: ingested {} image(s)", n);
+    save_grabbed_posts(output_dir, &posts).await
+}
+
+pub async fn save_grabbed_posts(output_dir: &Path, posts: &[GrabbedPost]) -> Result<usize> {
+    tokio::fs::create_dir_all(output_dir).await?;
+    let mut saved = 0usize;
+
+    for post in posts {
+        let post_dir = output_dir
+            .join(sanitize_filename_component(&post.source_type))
+            .join(sanitize_filename_component(&post.source_post_id));
+        tokio::fs::create_dir_all(&post_dir).await?;
+
+        for (index, image) in post.images.iter().enumerate() {
+            let file_path = post_dir.join(format!(
+                "{:03}.{}",
+                index + 1,
+                file_extension(&image.content_type)
+            ));
+            tokio::fs::write(&file_path, image.bytes.as_ref()).await?;
+            tracing::info!(path = %file_path.display(), source_url = %image.source_url, "Saved grabbed image");
+            saved += 1;
+        }
     }
 
-    if let Some(ref token) = twitter_token {
-        let adapter = TwitterAdapter::new(token);
-        let n = service.run_adapter(&adapter).await?;
-        tracing::info!("Twitter: ingested {} image(s)", n);
-    }
+    Ok(saved)
+}
 
-    Ok(())
+fn sanitize_filename_component(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn file_extension(content_type: &str) -> &'static str {
+    match content_type {
+        "image/png" => "png",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        _ => "jpg",
+    }
 }
