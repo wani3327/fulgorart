@@ -1,9 +1,7 @@
 mod adapters;
-mod config;
 mod model;
 
 pub use adapters::{PixivAdapter, SourceAdapter, TwitterAdapter};
-pub use config::IngestorConfig;
 pub use model::{GrabbedImage, GrabbedPost, SourcePost};
 
 use anyhow::Result;
@@ -41,31 +39,6 @@ pub async fn grab<T: SourceAdapter + ?Sized>(adapter: &T) -> Result<Vec<GrabbedP
     }
 
     Ok(grabbed_posts)
-}
-
-pub async fn run_to_directory(config: &IngestorConfig, output_dir: &Path) -> Result<usize> {
-    let adapters = config.build_adapters();
-    if adapters.is_empty() {
-        tracing::warn!(
-            "No adapter credentials found (PIXIV_ACCESS_TOKEN / TWITTER_BEARER_TOKEN). Nothing to do."
-        );
-        return Ok(0);
-    }
-
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .try_init()
-        .ok();
-
-    let mut posts = Vec::new();
-
-    for adapter in adapters {
-        posts.extend(grab(adapter.as_ref()).await?);
-    }
-
-    save_grabbed_posts(output_dir, &posts).await
 }
 
 pub async fn save_grabbed_posts(output_dir: &Path, posts: &[GrabbedPost]) -> Result<usize> {
