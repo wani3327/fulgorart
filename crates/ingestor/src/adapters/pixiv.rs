@@ -2,7 +2,6 @@ use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
 use serde::Deserialize;
-use std::collections::HashSet;
 use tokio::process::Command;
 
 use crate::{SourceAdapter, SourcePost};
@@ -132,7 +131,7 @@ def extract_liked_at(illust):
 def main():
     access_token = os.environ.get("PIXIV_ACCESS_TOKEN")
     if not access_token:
-        raise RuntimeError("PIXIV_ACCESS_TOKEN is required")
+        raise RuntimeError("pixivpy3 error: PIXIV_ACCESS_TOKEN environment variable is required but not set")
 
     user_id = (os.environ.get("PIXIV_USER_ID") or "").strip() or None
 
@@ -147,7 +146,7 @@ def main():
         me_user = get_value(me, "user")
         me_user_id = get_value(me_user, "id")
         if me_user_id is None:
-            raise RuntimeError("Could not resolve Pixiv user id")
+            raise RuntimeError("pixivpy3 error: could not resolve Pixiv user ID from API response")
         user_id = str(me_user_id)
 
     posts = []
@@ -171,13 +170,14 @@ def main():
                 continue
 
             user = get_value(illust, "user")
+            user_id = get_value(user, "id")
             posts.append(
                 {
                     "source_post_id": source_post_id,
                     "source_post_url": f"https://www.pixiv.net/artworks/{source_post_id}",
                     "liked_at": extract_liked_at(illust),
                     "author_name": get_value(user, "name"),
-                    "author_id": str(get_value(user, "id")) if get_value(user, "id") is not None else None,
+                    "author_id": str(user_id) if user_id is not None else None,
                     "image_urls": image_urls,
                     "raw_json": json.dumps(to_dict(illust), ensure_ascii=False, separators=(",", ":")),
                 }
@@ -209,7 +209,9 @@ if __name__ == "__main__":
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow!("pixivpy3 command failed: {stderr}"));
+            return Err(anyhow!(
+                "Python subprocess executing pixivpy3 failed: {stderr}"
+            ));
         }
 
         let stdout =
@@ -237,12 +239,7 @@ impl SourceAdapter for PixivAdapter {
                 continue;
             }
 
-            let mut seen = HashSet::new();
-            let image_urls = post
-                .image_urls
-                .into_iter()
-                .filter(|url| seen.insert(url.clone()))
-                .collect::<Vec<_>>();
+            let image_urls = post.image_urls;
             if image_urls.is_empty() {
                 continue;
             }
