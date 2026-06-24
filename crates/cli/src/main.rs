@@ -165,6 +165,7 @@ async fn main() -> Result<()> {
         }
 
         Commands::SearchTags { query } => {
+            let x = tagger::TaggerTool::run(db).await?;
             todo!();
             let tags = db.search_tags(&query).await?;
             for tag in tags {

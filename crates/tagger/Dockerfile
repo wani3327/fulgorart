@@ -12,6 +12,7 @@ RUN apt-get update \
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY models ./models
+# TODO curl from external repo rather than copy from local
 COPY crates/tagger/onnxruntime-linux-x64-1.24.4 ./onnxruntime-linux-x64-1.24.4
 
 RUN cargo build --release --locked -p fulgorart-tagger

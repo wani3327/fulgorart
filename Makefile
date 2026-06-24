@@ -13,7 +13,7 @@ DOCKERHUB_IMAGE ?= $(DOCKERHUB_USER)/$(TAGGER_IMAGE_NAME):$(TAGGER_IMAGE_TAG)
 #   make run-tagger -- ./examples/eru.jpg
 #   make docker-run-tagger -- https://example.com/a.jpg
 # Also supports ARGS="...".
-ARG_TARGETS := run-tagger docker-run-tagger docker-run-tagger-persist
+ARG_TARGETS := run-cli run-tagger docker-run-tagger docker-run-tagger-persist
 ifneq (,$(filter $(firstword $(MAKECMDGOALS)),$(ARG_TARGETS)))
 TARGET_ARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
 
@@ -39,7 +39,7 @@ run-web:
 	cargo run --bin fulgorart-web
 
 run-cli:
-	cargo run --bin fulgorart-cli -- --help
+	GOOGLE_APPLICATION_CREDENTIALS=/home/ubuntu/fulgorart/development-493004-1f72f74562c7.json cargo run --bin fulgorart-cli -- $(or $(ARGS),$(TARGET_ARGS))
 
 run-tagger:
 	ORT_DYLIB_PATH=/home/ubuntu/fulgorart/crates/tagger/onnxruntime-linux-x64-1.24.4/lib/libonnxruntime.so cargo run --bin fulgorart-tagger -- $(or $(ARGS),$(TARGET_ARGS))

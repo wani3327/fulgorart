@@ -26,3 +26,5 @@ development-493004-1f72f74562c7.json
 onnxruntime-linux-x64-1.24.4/
 examples/*.jpg
 nohup.out
+
+.github/prompts
