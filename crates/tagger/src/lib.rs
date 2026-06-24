@@ -245,4 +245,3 @@ impl Wd14Tagger {
         Ok(predictions)
     }
 }
-

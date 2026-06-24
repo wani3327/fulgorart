@@ -60,22 +60,20 @@ async fn ingest_post(db: &Db, storage: &R2StorageJob, post: GrabbedPost) -> Resu
             &post.source_post_id,
             &post.source_post_url,
             post.liked_at.as_deref(),
+            post.author_source_id.as_deref(),
             post.author_name.as_deref(),
-            post.author_id.as_deref(),
+            post.author_url.as_deref(),
             post.raw_json.as_deref(),
         )
         .await?;
-    let group_row = db.insert_image_group(Some(post_row.id)).await?;
     let stored_images = storage.store_post(post).await?;
 
     for image in &stored_images {
         let asset = db
             .insert_image_asset(
                 Some(post_row.id),
-                Some(group_row.id),
                 &image.sha256,
-                &image.r2_key,
-                &image.r2_url,
+                &image.s3_key,
                 None,
                 None,
                 Some(image.file_size),
@@ -143,7 +141,7 @@ async fn run_local_tagger(db: &Db, tagger: &LocalTaggerJob, batch_size: usize) -
         }
 
         for job in &jobs {
-            match tagger.tag_r2_key(&job.r2_key).await {
+            match tagger.tag_r2_key(&job.s3_key).await {
                 Ok(tags) => apply_job_tags(db, job, &tags).await?,
                 Err(error) => {
                     let message = format!("{error:#}");
@@ -175,7 +173,7 @@ async fn run_cloud_tagger(db: &Db, tagger: &CloudRunTaggerJob, batch_size: usize
                 .await?;
         }
 
-        let keys: Vec<String> = jobs.iter().map(|job| job.r2_key.clone()).collect();
+        let keys: Vec<String> = jobs.iter().map(|job| job.s3_key.clone()).collect();
         match tagger.tag(&keys).await {
             Ok(results) => {
                 let result_map: HashMap<&str, &BridgeTagResult> = results
@@ -183,10 +181,11 @@ async fn run_cloud_tagger(db: &Db, tagger: &CloudRunTaggerJob, batch_size: usize
                     .map(|result| (result.key.as_str(), result))
                     .collect();
                 for job in &jobs {
-                    match result_map.get(job.r2_key.as_str()) {
+                    match result_map.get(job.s3_key.as_str()) {
                         Some(result) => apply_job_tags(db, job, &result.tags).await?,
                         None => {
-                            let message = format!("No tag output found for R2 key: {}", job.r2_key);
+                            let message =
+                                format!("No tag output found for storage key: {}", job.s3_key);
                             mark_job_failed(db, job, &message).await?;
                         }
                     }

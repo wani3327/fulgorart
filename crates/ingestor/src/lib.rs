@@ -33,7 +33,8 @@ pub async fn grab<T: SourceAdapter + ?Sized>(adapter: &T) -> Result<Vec<GrabbedP
                 source_post_url: post.source_post_url,
                 liked_at: post.liked_at,
                 author_name: post.author_name,
-                author_id: post.author_id,
+                author_source_id: post.author_source_id,
+                author_url: post.author_url,
                 raw_json: post.raw_json,
                 images,
             });

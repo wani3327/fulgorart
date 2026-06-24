@@ -8,7 +8,8 @@ pub struct SourcePost {
     pub source_post_url: String,
     pub liked_at: Option<String>,
     pub author_name: Option<String>,
-    pub author_id: Option<String>,
+    pub author_source_id: Option<String>,
+    pub author_url: Option<String>,
     pub image_urls: Vec<String>,
     pub raw_json: Option<String>,
 }
@@ -27,7 +28,8 @@ pub struct GrabbedPost {
     pub source_post_url: String,
     pub liked_at: Option<String>,
     pub author_name: Option<String>,
-    pub author_id: Option<String>,
+    pub author_source_id: Option<String>,
+    pub author_url: Option<String>,
     pub raw_json: Option<String>,
     pub images: Vec<GrabbedImage>,
 }

@@ -1,3 +1,5 @@
+mod tagger;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use fulgorart_db::{Db, DbConfig};
@@ -77,6 +79,7 @@ async fn main() -> Result<()> {
             author_name,
             author_id,
         } => {
+            todo!();
             let path = std::path::Path::new(&file);
             let data = tokio::fs::read(path).await?;
             let bytes = bytes::Bytes::from(data.clone());
@@ -118,20 +121,18 @@ async fn main() -> Result<()> {
                     &source_post_id,
                     &source_post_url,
                     None,
-                    author_name.as_deref(),
                     author_id.as_deref(),
+                    author_name.as_deref(),
+                    None,
                     None,
                 )
                 .await?;
-            let group = db.insert_image_group(Some(post.id)).await?;
 
             let asset = db
                 .insert_image_asset(
                     Some(post.id),
-                    Some(group.id),
                     &sha256,
                     &key,
-                    &r2_url,
                     width,
                     height,
                     Some(data.len() as i64),
@@ -141,13 +142,14 @@ async fn main() -> Result<()> {
                 .await?;
 
             println!("Imported image id={} sha256={}", asset.id, sha256);
-            println!("R2 URL: {}", r2_url);
+            println!("S3 URL: {}", r2_url);
 
             let job = db.ensure_tag_job(asset.id).await?;
             println!("Tag job queued: id={}", job.id);
         }
 
         Commands::ListImages { page, per_page } => {
+            let r2 = R2Client::new(&r2_config).await?;
             let images = db.list_image_assets(page, per_page).await?;
             println!("{} images (page {})", images.len(), page);
             for img in images {
@@ -157,12 +159,13 @@ async fn main() -> Result<()> {
                     img.sha256.chars().take(12).collect::<String>(),
                     img.width.unwrap_or(0),
                     img.height.unwrap_or(0),
-                    img.r2_url
+                    r2.object_url(&img.s3_key)
                 );
             }
         }
 
         Commands::SearchTags { query } => {
+            todo!();
             let tags = db.search_tags(&query).await?;
             for tag in tags {
                 println!(

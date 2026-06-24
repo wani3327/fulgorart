@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use fulgorart_storage::{R2Client, R2Config};
-use fulgorart_tagger::{Wd14Tagger, TagPrediction};
+use fulgorart_tagger::{TagPrediction, Wd14Tagger};
 use serde::Serialize;
 
 fn print_usage() {

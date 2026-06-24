@@ -24,14 +24,24 @@ pub struct Db {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize)]
+pub struct AuthorRow {
+    pub id: i64,
+    pub source_type: String,
+    pub source_id: String,
+    pub name: Option<String>,
+    pub url: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize)]
 pub struct PostRow {
     pub id: i64,
     pub source_type: String,
     pub source_post_id: String,
     pub source_post_url: String,
     pub liked_at: Option<String>,
-    pub author_name: Option<String>,
-    pub author_id: Option<String>,
+    pub author_id: Option<i64>,
     pub raw_json: Option<String>,
     pub created_at: String,
     pub updated_at: String,
@@ -41,10 +51,8 @@ pub struct PostRow {
 pub struct ImageAssetRow {
     pub id: i64,
     pub post_id: Option<i64>,
-    pub group_id: Option<i64>,
     pub sha256: String,
-    pub r2_key: String,
-    pub r2_url: String,
+    pub s3_key: String,
     pub width: Option<i64>,
     pub height: Option<i64>,
     pub file_size: Option<i64>,
@@ -95,19 +103,11 @@ pub struct SourceAccountRow {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize)]
-pub struct ImageGroupRow {
-    pub id: i64,
-    pub post_id: Option<i64>,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TagJobWithKey {
     pub job_id: i64,
     pub image_id: i64,
-    pub r2_key: String,
+    pub s3_key: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -130,7 +130,48 @@ impl Db {
         Ok(Db { pool })
     }
 
-    // ---- Post ----
+    // ---- Post / Author ----
+
+    pub async fn upsert_author(
+        &self,
+        source_type: &str,
+        source_id: &str,
+        name: Option<&str>,
+        url: Option<&str>,
+    ) -> Result<AuthorRow> {
+        let result = sqlx::query(
+            "INSERT INTO author (source_type, source_id, name, url)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT(source_type, source_id) DO UPDATE SET
+               name = COALESCE(excluded.name, author.name),
+               url = COALESCE(excluded.url, author.url),
+               updated_at = datetime('now')",
+        )
+        .bind(source_type)
+        .bind(source_id)
+        .bind(name)
+        .bind(url)
+        .execute(&self.pool)
+        .await?;
+
+        let id = result.last_insert_rowid();
+        if id == 0 {
+            sqlx::query_as::<_, AuthorRow>(
+                "SELECT * FROM author WHERE source_type = ? AND source_id = ?",
+            )
+            .bind(source_type)
+            .bind(source_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(Into::into)
+        } else {
+            sqlx::query_as::<_, AuthorRow>("SELECT * FROM author WHERE id = ?")
+                .bind(id)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(Into::into)
+        }
+    }
 
     pub async fn insert_post(
         &self,
@@ -138,17 +179,26 @@ impl Db {
         source_post_id: &str,
         source_post_url: &str,
         liked_at: Option<&str>,
+        author_source_id: Option<&str>,
         author_name: Option<&str>,
-        author_id: Option<&str>,
+        author_url: Option<&str>,
         raw_json: Option<&str>,
     ) -> Result<PostRow> {
+        let author_id = match author_source_id {
+            Some(source_id) => Some(
+                self.upsert_author(source_type, source_id, author_name, author_url)
+                    .await?
+                    .id,
+            ),
+            None => None,
+        };
+
         let result = sqlx::query(
-            "INSERT INTO post (source_type, source_post_id, source_post_url, liked_at, author_name, author_id, raw_json)
-             VALUES (?, ?, ?, ?, ?, ?, ?)
+            "INSERT INTO post (source_type, source_post_id, source_post_url, liked_at, author_id, raw_json)
+             VALUES (?, ?, ?, ?, ?, ?)
              ON CONFLICT(source_type, source_post_id) DO UPDATE SET
                source_post_url = excluded.source_post_url,
                liked_at = excluded.liked_at,
-               author_name = excluded.author_name,
                author_id = excluded.author_id,
                raw_json = excluded.raw_json,
                updated_at = datetime('now')"
@@ -157,7 +207,6 @@ impl Db {
         .bind(source_post_id)
         .bind(source_post_url)
         .bind(liked_at)
-        .bind(author_name)
         .bind(author_id)
         .bind(raw_json)
         .execute(&self.pool)
@@ -202,45 +251,11 @@ impl Db {
 
     // ---- ImageAsset ----
 
-    pub async fn insert_image_group(&self, post_id: Option<i64>) -> Result<ImageGroupRow> {
-        match post_id {
-            Some(post_id) => {
-                sqlx::query(
-                    "INSERT INTO image_group (post_id) VALUES (?)
-                     ON CONFLICT(post_id) DO UPDATE SET
-                       updated_at = datetime('now')",
-                )
-                .bind(post_id)
-                .execute(&self.pool)
-                .await?;
-
-                sqlx::query_as::<_, ImageGroupRow>("SELECT * FROM image_group WHERE post_id = ?")
-                    .bind(post_id)
-                    .fetch_one(&self.pool)
-                    .await
-                    .map_err(Into::into)
-            }
-            None => {
-                let result = sqlx::query("INSERT INTO image_group (post_id) VALUES (NULL)")
-                    .execute(&self.pool)
-                    .await?;
-
-                sqlx::query_as::<_, ImageGroupRow>("SELECT * FROM image_group WHERE id = ?")
-                    .bind(result.last_insert_rowid())
-                    .fetch_one(&self.pool)
-                    .await
-                    .map_err(Into::into)
-            }
-        }
-    }
-
     pub async fn insert_image_asset(
         &self,
         post_id: Option<i64>,
-        group_id: Option<i64>,
         sha256: &str,
-        r2_key: &str,
-        r2_url: &str,
+        s3_key: &str,
         width: Option<i64>,
         height: Option<i64>,
         file_size: Option<i64>,
@@ -248,18 +263,16 @@ impl Db {
         source_url: Option<&str>,
     ) -> Result<ImageAssetRow> {
         sqlx::query(
-            "INSERT INTO image_asset (post_id, group_id, sha256, r2_key, r2_url, width, height, file_size, content_type, source_url)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "INSERT INTO image_asset (post_id, sha256, s3_key, width, height, file_size, content_type, source_url)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(sha256) DO UPDATE SET
-                r2_url = excluded.r2_url,
-                group_id = COALESCE(image_asset.group_id, excluded.group_id),
+                s3_key = excluded.s3_key,
+                post_id = COALESCE(image_asset.post_id, excluded.post_id),
                 updated_at = datetime('now')"
         )
         .bind(post_id)
-        .bind(group_id)
         .bind(sha256)
-        .bind(r2_key)
-        .bind(r2_url)
+        .bind(s3_key)
         .bind(width)
         .bind(height)
         .bind(file_size)
@@ -510,7 +523,7 @@ impl Db {
 
     pub async fn get_pending_tag_jobs_with_keys(&self, limit: i64) -> Result<Vec<TagJobWithKey>> {
         let rows = sqlx::query_as::<_, (i64, i64, String)>(
-            "SELECT tj.id, tj.image_id, ia.r2_key
+            "SELECT tj.id, tj.image_id, ia.s3_key
              FROM tag_job tj
              JOIN image_asset ia ON tj.image_id = ia.id
              WHERE tj.status = 'pending'
@@ -522,10 +535,10 @@ impl Db {
         .await?;
         Ok(rows
             .into_iter()
-            .map(|(job_id, image_id, r2_key)| TagJobWithKey {
+            .map(|(job_id, image_id, s3_key)| TagJobWithKey {
                 job_id,
                 image_id,
-                r2_key,
+                s3_key,
             })
             .collect())
     }

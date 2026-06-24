@@ -6,8 +6,7 @@ use sha2::Digest;
 #[derive(Debug, Clone)]
 pub struct StoredImage {
     pub sha256: String,
-    pub r2_key: String,
-    pub r2_url: String,
+    pub s3_key: String,
     pub file_size: i64,
     pub content_type: String,
     pub source_url: String,
@@ -38,7 +37,6 @@ impl R2StorageJob {
                 _ => "jpg",
             };
             let key = R2Client::canonical_key(&post.source_type, &sha256, ext);
-            let r2_url = self.r2.object_url(&key);
             let content_type = image.content_type.clone();
             let source_url = image.source_url;
             let file_size = image.bytes.len() as i64;
@@ -47,8 +45,7 @@ impl R2StorageJob {
 
             stored.push(StoredImage {
                 sha256,
-                r2_key: key,
-                r2_url,
+                s3_key: key,
                 file_size,
                 content_type,
                 source_url,

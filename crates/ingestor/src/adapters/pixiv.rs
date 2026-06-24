@@ -244,11 +244,17 @@ impl SourceAdapter for PixivAdapter {
                 }
 
                 let raw_json = serde_json::to_string(&illust).ok();
-                let (author_name, author_id) = illust
+                let (author_name, author_source_id, author_url) = illust
                     .user
                     .as_ref()
-                    .map(|u| (u.name.clone(), Some(u.id.to_string())))
-                    .unwrap_or((None, None));
+                    .map(|u| {
+                        (
+                            u.name.clone(),
+                            Some(u.id.to_string()),
+                            Some(format!("https://www.pixiv.net/users/{}", u.id)),
+                        )
+                    })
+                    .unwrap_or((None, None, None));
 
                 posts.push(SourcePost {
                     source_type: self.source_type().to_string(),
@@ -256,7 +262,8 @@ impl SourceAdapter for PixivAdapter {
                     source_post_url: format!("https://www.pixiv.net/artworks/{source_post_id}"),
                     liked_at,
                     author_name,
-                    author_id,
+                    author_source_id,
+                    author_url,
                     image_urls,
                     raw_json,
                 });

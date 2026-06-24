@@ -24,6 +24,7 @@ impl R2Config {
     }
 }
 
+#[derive(Clone)]
 pub struct R2Client {
     client: aws_sdk_s3::Client,
     endpoint_url: String,

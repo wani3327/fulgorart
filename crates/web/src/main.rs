@@ -8,6 +8,7 @@ use axum::{
 };
 use base64::Engine;
 use fulgorart_db::{Db, DbConfig, ImageAssetRow, TagRow};
+use fulgorart_storage::{R2Client, R2Config};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
@@ -32,6 +33,7 @@ impl WebConfig {
 #[derive(Clone)]
 struct AppState {
     db: Db,
+    storage: R2Client,
     config: WebConfig,
 }
 
@@ -93,12 +95,13 @@ async fn get_index(State(state): State<AppState>) -> Html<String> {
     let images = state.db.list_image_assets(1, 50).await.unwrap_or_default();
     let mut cards = String::new();
     for img in &images {
+        let url = state.storage.object_url(&img.s3_key);
         cards.push_str(&format!(
             r#"<div class="card">
   <a href="/image/{id}"><img src="{url}" loading="lazy" alt="image {id}"/></a>
 </div>"#,
             id = img.id,
-            url = img.r2_url,
+            url = url,
         ));
     }
     Html(format!(
@@ -139,6 +142,7 @@ async fn get_image_page(
         .ok_or(StatusCode::NOT_FOUND)?;
 
     let tags = state.db.get_image_tags(id).await.unwrap_or_default();
+    let url = state.storage.object_url(&asset.s3_key);
     let tag_list = tags
         .iter()
         .map(|tag| {
@@ -195,7 +199,7 @@ async function removeTag(imageId, tagId) {{
 </body>
 </html>"#,
         id = id,
-        url = asset.r2_url,
+        url = url,
         tag_list = tag_list,
     )))
 }
@@ -306,9 +310,11 @@ async fn main() -> anyhow::Result<()> {
     let db_config = DbConfig::from_env();
     let config = WebConfig::from_env();
     let db = Db::connect(&db_config.path).await?;
+    let storage = R2Client::new(&R2Config::from_env()).await?;
 
     let state = AppState {
         db,
+        storage,
         config: config.clone(),
     };
     let app = Router::new()
