@@ -12,7 +12,6 @@ pub struct R2Config {
 
 impl R2Config {
     pub fn from_env() -> Self {
-        dotenvy::dotenv().ok();
         Self {
             bucket: std::env::var("FULGORART_R2_BUCKET")
                 .unwrap_or_else(|_| "fulgorart-images".to_string()),

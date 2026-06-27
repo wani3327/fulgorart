@@ -12,6 +12,5 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
-dotenvy = { workspace = true }
 bytes = "1"
 chrono = { workspace = true }

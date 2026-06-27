@@ -8,7 +8,6 @@ pub struct TaggerConfig {
 
 impl TaggerConfig {
     pub fn from_env() -> Self {
-        dotenvy::dotenv().ok();
         Self {
             model_path: std::env::var("WD14_MODEL_PATH")
                 .unwrap_or_else(|_| "./models/wd14-convnext.onnx".to_string()),

@@ -10,7 +10,6 @@ pub struct IngestorConfig {
 
 impl IngestorConfig {
     pub fn from_env() -> Self {
-        dotenvy::dotenv().ok();
         Self {
             default_output_dir: std::env::var("FULGORART_INGESTOR_OUTPUT_DIR")
                 .unwrap_or_else(|_| "./data/ingestor".to_string()),

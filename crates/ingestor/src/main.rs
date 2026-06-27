@@ -11,6 +11,7 @@ fn output_dir_from_args(default_output_dir: &str) -> PathBuf {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    dotenvy::dotenv().ok();
     let config = fulgorart_ingestor::IngestorConfig::from_env();
     let output_dir = output_dir_from_args(&config.default_output_dir);
     let saved = fulgorart_ingestor::run_to_directory(&config, &output_dir).await?;

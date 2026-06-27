@@ -7,7 +7,6 @@ pub struct DbConfig {
 
 impl DbConfig {
     pub fn from_env() -> Self {
-        dotenvy::dotenv().ok();
         Self {
             path: std::env::var("FULGORART_DB_PATH")
                 .unwrap_or_else(|_| "./data/fulgorart.db".to_string()),

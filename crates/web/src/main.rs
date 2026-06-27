@@ -19,7 +19,6 @@ struct WebConfig {
 
 impl WebConfig {
     fn from_env() -> Self {
-        dotenvy::dotenv().ok();
         Self {
             password: std::env::var("FULGORART_PASSWORD").ok(),
             port: std::env::var("FULGORART_PORT")
@@ -301,6 +300,7 @@ async fn api_list_tags(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    dotenvy::dotenv().ok();
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),

@@ -149,7 +149,8 @@ async fn process_r2_keys(tagger: &Wd14Tagger, keys: &[String]) -> Result<Vec<Tag
 async fn main() -> Result<()> {
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
-
+    
+    dotenvy::dotenv().ok();
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_|"info".into()))
         .with(tracing_stackdriver::layer())
