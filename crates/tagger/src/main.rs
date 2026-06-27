@@ -29,19 +29,7 @@ enum CliMode {
 }
 
 #[derive(Serialize)]
-struct PathTagResult {
-    path: String,
-    tags: Vec<TagPrediction>,
-}
-
-#[derive(Serialize)]
-struct UrlTagResult {
-    url: String,
-    tags: Vec<TagPrediction>,
-}
-
-#[derive(Serialize)]
-struct R2TagResult {
+struct TagResult {
     key: String,
     tags: Vec<TagPrediction>,
 }
@@ -89,23 +77,19 @@ fn parse_args() -> Result<CliMode> {
     }
 }
 
-async fn process_paths(tagger: &Wd14Tagger, paths: &[String]) -> Result<usize> {
-    let mut total = 0usize;
+async fn process_paths(tagger: &Wd14Tagger, paths: &[String]) -> Result<Vec<TagResult>> {
+    let mut res = vec![];
     for path in paths {
         let bytes = tokio::fs::read(path)
             .await
             .with_context(|| format!("Failed to read image file: {}", path))?;
         let tags = tagger.tag(&bytes)?;
-        println!(
-            "{}",
-            serde_json::to_string(&PathTagResult {
-                path: path.clone(),
-                tags,
-            })?
-        );
-        total += 1;
+        res.push(TagResult {
+            key: path.clone(),
+            tags,
+        });
     }
-    Ok(total)
+    Ok(res)
 }
 
 async fn download_url(http: &reqwest::Client, url: &str) -> Result<Bytes> {
@@ -120,22 +104,18 @@ async fn download_url(http: &reqwest::Client, url: &str) -> Result<Bytes> {
     response.bytes().await.context("Failed to read image body")
 }
 
-async fn process_urls(tagger: &Wd14Tagger, urls: &[String]) -> Result<usize> {
+async fn process_urls(tagger: &Wd14Tagger, urls: &[String]) -> Result<Vec<TagResult>> {
     let http = reqwest::Client::new();
-    let mut total = 0usize;
+    let mut res = vec![];
     for url in urls {
         let bytes = download_url(&http, url).await?;
         let tags = tagger.tag(&bytes)?;
-        println!(
-            "{}",
-            serde_json::to_string(&UrlTagResult {
-                url: url.clone(),
-                tags,
-            })?
-        );
-        total += 1;
+        res.push(TagResult {
+            key: url.clone(),
+            tags,
+        });
     }
-    Ok(total)
+    Ok(res)
 }
 
 fn r2_config_from_env() -> Result<R2Config> {
@@ -148,52 +128,52 @@ fn r2_config_from_env() -> Result<R2Config> {
     Ok(config)
 }
 
-async fn process_r2_keys(tagger: &Wd14Tagger, keys: &[String]) -> Result<usize> {
+async fn process_r2_keys(tagger: &Wd14Tagger, keys: &[String]) -> Result<Vec<TagResult>> {
     let r2_config = r2_config_from_env()?;
     let r2 = R2Client::new(&r2_config).await?;
-    let mut total = 0usize;
-
+    let mut res = vec![];
     for raw_key in keys {
         let key = raw_key.strip_prefix("r2://").unwrap_or(raw_key);
         tracing::debug!(%key, bucket = r2.bucket(), "Fetching image from R2");
         let bytes = r2.download(key).await?;
         let tags: Vec<TagPrediction> = tagger.tag(&bytes)?;
-        println!(
-            "{}",
-            serde_json::to_string(&R2TagResult {
-                key: key.to_string(),
-                tags,
-            })?
-        );
-        total += 1;
+        res.push(TagResult {
+            key: key.to_string(),
+            tags,
+        });
     }
-
-    Ok(total)
+    Ok(res)
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_|"info".into()))
+        .with(tracing_stackdriver::layer())
         .try_init()
         .ok();
 
     let tagger = Wd14Tagger::from_env()?;
-    match parse_args()? {
+    let res = match parse_args()? {
         CliMode::LocalPaths(paths) => {
-            let n = process_paths(&tagger, &paths).await?;
-            tracing::info!(processed = n, "Tagger processed local file(s)");
+            process_paths(&tagger, &paths).await?
         }
         CliMode::Urls(urls) => {
-            let n = process_urls(&tagger, &urls).await?;
-            tracing::info!(processed = n, "Tagger processed URL image(s)");
+            process_urls(&tagger, &urls).await?
         }
         CliMode::R2Keys(keys) => {
-            let n = process_r2_keys(&tagger, &keys).await?;
-            tracing::info!(processed = n, "Tagger processed R2 image(s)");
+            process_r2_keys(&tagger, &keys).await?
         }
+    };
+
+    let n = res.len();
+    for r in res {
+        tracing::info!(severity = %tracing_stackdriver::LogSeverity::Notice, "{}", serde_json::to_string(&r)?);
     }
+
+    tracing::info!(processed = n, "Tagger processed file(s)");
     Ok(())
 }
