@@ -14,6 +14,7 @@ use crate::tagger_job::{BridgeTagPrediction, BridgeTagResult, CloudRunTaggerJob,
 use fulgorart_db::{Db, TagJobWithKey};
 use fulgorart_ingestor::GrabbedPost;
 use fulgorart_storage::R2Client;
+use fulgorart_tagger::Wd14Labels;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TaggerMode {
@@ -107,10 +108,18 @@ async fn run_ingest_once(
     Ok(())
 }
 
-async fn apply_job_tags(db: &Db, job: &TagJobWithKey, tags: &[BridgeTagPrediction]) -> Result<()> {
+async fn apply_job_tags(
+    db: &Db,
+    labels: &Wd14Labels,
+    job: &TagJobWithKey,
+    tags: &[BridgeTagPrediction],
+) -> Result<()> {
     for prediction in tags {
+        let label = labels
+            .label_for_tag_id(prediction.tag_id)
+            .ok_or_else(|| anyhow::anyhow!("Unknown WD14 tag id: {}", prediction.tag_id))?;
         let tag = db
-            .get_or_create_tag(&prediction.name, prediction.category.as_deref())
+            .get_or_create_tag(&label.name, Some(&label.category))
             .await?;
         db.insert_image_tag(job.image_id, tag.id, "wd14", Some(prediction.score as f64))
             .await?;
@@ -142,7 +151,7 @@ async fn run_local_tagger(db: &Db, tagger: &LocalTaggerJob, batch_size: usize) -
 
         for job in &jobs {
             match tagger.tag_r2_key(&job.s3_key).await {
-                Ok(tags) => apply_job_tags(db, job, &tags).await?,
+                Ok(tags) => apply_job_tags(db, tagger.labels(), job, &tags).await?,
                 Err(error) => {
                     let message = format!("{error:#}");
                     mark_job_failed(db, job, &message).await?;
@@ -182,7 +191,7 @@ async fn run_cloud_tagger(db: &Db, tagger: &CloudRunTaggerJob, batch_size: usize
                     .collect();
                 for job in &jobs {
                     match result_map.get(job.s3_key.as_str()) {
-                        Some(result) => apply_job_tags(db, job, &result.tags).await?,
+                        Some(result) => apply_job_tags(db, tagger.labels(), job, &result.tags).await?,
                         None => {
                             let message =
                                 format!("No tag output found for storage key: {}", job.s3_key);

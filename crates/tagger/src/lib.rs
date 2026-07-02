@@ -16,14 +16,14 @@ const WD14_INPUT_SIZE: u32 = 448;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TagPrediction {
-    pub name: String,
-    pub category: Option<String>,
+    pub tag_id: i64,
+    pub category_id: i32,
     pub score: f32,
 }
 
 #[derive(Debug, Clone)]
 struct LabelEntry {
-    name: String,
+    tag_id: i64,
     /// Raw category integer from the CSV (0=general, 4=character, 9=copyright,
     /// 1=artist, 5=meta).  The first four rows are ratings and are skipped.
     category: i32,
@@ -113,8 +113,8 @@ impl Wd14Tagger {
     fn load_labels(path: &str) -> Result<(Vec<LabelEntry>, usize)> {
         #[derive(Deserialize)]
         struct Row {
+            tag_id: i64,
             #[allow(dead_code)]
-            tag_id: Option<i64>,
             name: String,
             category: i32,
             // `count` column is ignored
@@ -127,7 +127,7 @@ impl Wd14Tagger {
         for result in reader.deserialize::<Row>() {
             let row = result.context("Failed to parse labels CSV row")?;
             all.push(LabelEntry {
-                name: row.name,
+                tag_id: row.tag_id,
                 category: row.category,
             });
         }
@@ -216,8 +216,8 @@ impl Wd14Tagger {
             if i < self.rating_count {
                 // Always include all rating tags regardless of threshold.
                 predictions.push(TagPrediction {
-                    name: label.name.clone(),
-                    category: Some("rating".to_string()),
+                    tag_id: label.tag_id,
+                    category_id: label.category,
                     score,
                 });
                 continue;
@@ -229,8 +229,8 @@ impl Wd14Tagger {
             };
             if score >= threshold {
                 predictions.push(TagPrediction {
-                    name: label.name.clone(),
-                    category: Some(label.category_str().to_string()),
+                    tag_id: label.tag_id,
+                    category_id: label.category,
                     score,
                 });
             }

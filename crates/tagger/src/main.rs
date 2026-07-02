@@ -34,6 +34,50 @@ struct TagResult {
     tags: Vec<TagPrediction>,
 }
 
+#[cfg(not(feature = "gcp"))]
+fn init_tracing() {
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .try_init()
+        .ok();
+}
+
+#[cfg(feature = "gcp")]
+fn init_tracing() {
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .with(tracing_stackdriver::layer())
+        .try_init()
+        .ok();
+}
+
+#[cfg(not(feature = "gcp"))]
+fn log_tag_result(result: &TagResult) -> Result<()> {
+    tracing::info!("{}", serde_json::to_string(result)?);
+    Ok(())
+}
+
+#[cfg(feature = "gcp")]
+fn log_tag_result(result: &TagResult) -> Result<()> {
+    tracing::info!(
+        severity = %tracing_stackdriver::LogSeverity::Notice,
+        "{}",
+        serde_json::to_string(result)?
+    );
+    Ok(())
+}
+
 fn parse_args() -> Result<CliMode> {
     let mut args = std::env::args().skip(1).peekable();
     if args.peek().is_none() {
@@ -147,32 +191,19 @@ async fn process_r2_keys(tagger: &Wd14Tagger, keys: &[String]) -> Result<Vec<Tag
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    use tracing_subscriber::layer::SubscriberExt;
-    use tracing_subscriber::util::SubscriberInitExt;
-    
     dotenvy::dotenv().ok();
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_|"info".into()))
-        .with(tracing_stackdriver::layer())
-        .try_init()
-        .ok();
+    init_tracing();
 
     let tagger = Wd14Tagger::from_env()?;
     let res = match parse_args()? {
-        CliMode::LocalPaths(paths) => {
-            process_paths(&tagger, &paths).await?
-        }
-        CliMode::Urls(urls) => {
-            process_urls(&tagger, &urls).await?
-        }
-        CliMode::R2Keys(keys) => {
-            process_r2_keys(&tagger, &keys).await?
-        }
+        CliMode::LocalPaths(paths) => process_paths(&tagger, &paths).await?,
+        CliMode::Urls(urls) => process_urls(&tagger, &urls).await?,
+        CliMode::R2Keys(keys) => process_r2_keys(&tagger, &keys).await?,
     };
 
     let n = res.len();
     for r in res {
-        tracing::info!(severity = %tracing_stackdriver::LogSeverity::Notice, "{}", serde_json::to_string(&r)?);
+        log_tag_result(&r)?;
     }
 
     tracing::info!(processed = n, "Tagger processed file(s)");

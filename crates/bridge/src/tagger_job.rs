@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use fulgorart_storage::{R2Client, R2Config};
-use fulgorart_tagger::{TagPrediction, Wd14Tagger};
+use fulgorart_tagger::{TagPrediction, Wd14Labels, Wd14Tagger};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -14,16 +14,16 @@ pub struct BridgeTagResult {
 
 #[derive(Debug, Clone)]
 pub struct BridgeTagPrediction {
-    pub name: String,
-    pub category: Option<String>,
+    pub tag_id: i64,
+    pub category_id: i32,
     pub score: f32,
 }
 
 fn convert_predictions(tags: Vec<TagPrediction>) -> Vec<BridgeTagPrediction> {
     tags.into_iter()
         .map(|prediction| BridgeTagPrediction {
-            name: prediction.name,
-            category: prediction.category,
+            tag_id: prediction.tag_id,
+            category_id: prediction.category_id,
             score: prediction.score,
         })
         .collect()
@@ -32,6 +32,7 @@ fn convert_predictions(tags: Vec<TagPrediction>) -> Vec<BridgeTagPrediction> {
 pub struct LocalTaggerJob {
     r2: R2Client,
     tagger: Wd14Tagger,
+    labels: Wd14Labels,
 }
 
 impl LocalTaggerJob {
@@ -39,7 +40,12 @@ impl LocalTaggerJob {
         Ok(Self {
             r2: R2Client::new(&r2_config).await?,
             tagger: Wd14Tagger::from_env()?,
+            labels: Wd14Labels::from_env()?,
         })
+    }
+
+    pub fn labels(&self) -> &Wd14Labels {
+        &self.labels
     }
 
     pub fn tag_image(&self, image_bytes: &[u8]) -> Result<Vec<BridgeTagPrediction>> {
@@ -117,8 +123,8 @@ struct CloudRunTagResult {
 
 #[derive(Debug, Deserialize)]
 struct CloudRunTagPrediction {
-    pub name: String,
-    pub category: Option<String>,
+    pub tag_id: i64,
+    pub category_id: i32,
     pub score: f32,
 }
 
@@ -126,6 +132,7 @@ pub struct CloudRunTaggerJob {
     config: CloudRunConfig,
     http: reqwest::Client,
     auth: Arc<dyn gcp_auth::TokenProvider>,
+    labels: Wd14Labels,
 }
 
 impl CloudRunTaggerJob {
@@ -134,7 +141,16 @@ impl CloudRunTaggerJob {
         let auth = gcp_auth::provider()
             .await
             .context("Failed to initialise GCP authentication")?;
-        Ok(Self { config, http, auth })
+        Ok(Self {
+            config,
+            http,
+            auth,
+            labels: Wd14Labels::from_env()?,
+        })
+    }
+
+    pub fn labels(&self) -> &Wd14Labels {
+        &self.labels
     }
 
     async fn bearer_token(&self) -> Result<String> {
@@ -311,8 +327,8 @@ impl CloudRunTaggerJob {
                                     .tags
                                     .into_iter()
                                     .map(|tag| BridgeTagPrediction {
-                                        name: tag.name,
-                                        category: tag.category,
+                                        tag_id: tag.tag_id,
+                                        category_id: tag.category_id,
                                         score: tag.score,
                                     })
                                     .collect(),
