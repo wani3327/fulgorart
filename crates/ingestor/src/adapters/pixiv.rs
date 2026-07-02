@@ -1,8 +1,8 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
-use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use serde::Deserialize;
+use tokio::process::Command;
 
 use crate::{SourceAdapter, SourcePost};
 
@@ -12,75 +12,15 @@ pub struct PixivAdapter {
     client: reqwest::Client,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-struct PixivUserMeResponse {
-    user: PixivUser,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct PixivUser {
-    id: PixivId,
-    name: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(untagged)]
-enum PixivId {
-    String(String),
-    Number(u64),
-}
-
-impl std::fmt::Display for PixivId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PixivId::String(v) => f.write_str(v),
-            PixivId::Number(v) => write!(f, "{v}"),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct PixivBookmarksResponse {
-    #[serde(default)]
-    illusts: Vec<PixivIllust>,
-    next_url: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct PixivIllust {
-    id: u64,
-    user: Option<PixivUser>,
-    create_date: Option<String>,
-    bookmark_date: Option<String>,
-    #[serde(rename = "bookmark_data")]
-    bookmark_metadata: Option<PixivBookmarkData>,
-    meta_single_page: Option<PixivMetaSinglePage>,
-    #[serde(default)]
-    meta_pages: Vec<PixivMetaPage>,
-    image_urls: Option<PixivImageUrls>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct PixivBookmarkData {
-    date: Option<String>,
-    created_at: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct PixivMetaSinglePage {
-    original_image_url: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct PixivMetaPage {
-    image_urls: Option<PixivImageUrls>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct PixivImageUrls {
-    original: Option<String>,
-    large: Option<String>,
-    medium: Option<String>,
+#[derive(Debug, Deserialize)]
+struct PythonPost {
+    source_post_id: String,
+    source_post_url: String,
+    liked_at: Option<String>,
+    author_name: Option<String>,
+    author_id: Option<String>,
+    image_urls: Vec<String>,
+    raw_json: Option<String>,
 }
 
 impl PixivAdapter {
@@ -90,33 +30,6 @@ impl PixivAdapter {
             user_id,
             client: reqwest::Client::new(),
         }
-    }
-
-    fn request_builder(&self, url: &str) -> reqwest::RequestBuilder {
-        self.client
-            .get(url)
-            .bearer_auth(&self.access_token)
-            .header("User-Agent", "fulgorart-ingestor/0.1")
-    }
-
-    async fn resolve_user_id(&self) -> Result<String> {
-        if let Some(user_id) = &self.user_id {
-            let user_id = user_id.trim();
-            if !user_id.is_empty() {
-                return Ok(user_id.to_string());
-            }
-        }
-
-        let me: PixivUserMeResponse = self
-            .request_builder("https://app-api.pixiv.net/v2/user/me")
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await
-            .context("Failed to parse Pixiv /v2/user/me response")?;
-
-        Ok(me.user.id.to_string())
     }
 
     fn parse_since(since: Option<&str>) -> Option<chrono::DateTime<chrono::FixedOffset>> {
@@ -138,62 +51,175 @@ impl PixivAdapter {
             .unwrap_or(true)
     }
 
-    fn extract_image_urls(illust: &PixivIllust) -> Vec<String> {
-        let mut urls = Vec::new();
+    async fn fetch_with_pixivpy3(&self) -> Result<Vec<PythonPost>> {
+        let script = r#"
+import json
+import os
+import sys
 
-        if !illust.meta_pages.is_empty() {
-            for page in &illust.meta_pages {
-                if let Some(image_urls) = &page.image_urls {
-                    if let Some(url) = image_urls
-                        .original
-                        .as_deref()
-                        .or(image_urls.large.as_deref())
-                        .or(image_urls.medium.as_deref())
-                    {
-                        urls.push(url.to_string());
-                    }
+from pixivpy3 import AppPixivAPI
+
+
+def to_dict(value):
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value
+    if hasattr(value, "model_dump"):
+        return value.model_dump()
+    if hasattr(value, "dict"):
+        return value.dict()
+    try:
+        return dict(value)
+    except Exception:
+        return None
+
+
+def get_value(value, key, default=None):
+    if value is None:
+        return default
+    if isinstance(value, dict):
+        return value.get(key, default)
+    return getattr(value, key, default)
+
+
+def pick_first_image(image_urls):
+    image_urls = to_dict(image_urls) or {}
+    return image_urls.get("original") or image_urls.get("large") or image_urls.get("medium")
+
+
+def extract_image_urls(illust):
+    urls = []
+
+    meta_pages = get_value(illust, "meta_pages", []) or []
+    if meta_pages:
+        for page in meta_pages:
+            image_urls = get_value(page, "image_urls")
+            url = pick_first_image(image_urls)
+            if url:
+                urls.append(url)
+    else:
+        meta_single_page = get_value(illust, "meta_single_page")
+        original = get_value(meta_single_page, "original_image_url")
+        if original:
+            urls.append(original)
+        else:
+            image_urls = get_value(illust, "image_urls")
+            url = pick_first_image(image_urls)
+            if url:
+                urls.append(url)
+
+    deduped = []
+    seen = set()
+    for url in urls:
+        if url not in seen:
+            seen.add(url)
+            deduped.append(url)
+    return deduped
+
+
+def extract_liked_at(illust):
+    bookmark_data = get_value(illust, "bookmark_data")
+    return (
+        get_value(illust, "bookmark_date")
+        or get_value(bookmark_data, "date")
+        or get_value(bookmark_data, "created_at")
+        or get_value(illust, "create_date")
+    )
+
+
+def main():
+    access_token = os.environ.get("PIXIV_ACCESS_TOKEN")
+    if not access_token:
+        raise RuntimeError("pixivpy3 error: PIXIV_ACCESS_TOKEN environment variable is required but not set")
+
+    user_id = (os.environ.get("PIXIV_USER_ID") or "").strip() or None
+
+    api = AppPixivAPI()
+    api.set_auth(access_token, None)
+
+    if user_id is None:
+        me_response = api.no_auth_requests_call(
+            "GET", f"{api.hosts}/v2/user/me", req_auth=True
+        )
+        me = api.parse_result(me_response)
+        me_user = get_value(me, "user")
+        me_user_id = get_value(me_user, "id")
+        if me_user_id is None:
+            raise RuntimeError("pixivpy3 error: could not resolve Pixiv user ID from API response")
+        user_id = str(me_user_id)
+
+    posts = []
+    seen_post_ids = set()
+    params = {"user_id": user_id, "restrict": "public"}
+
+    while params:
+        result = api.user_bookmarks_illust(**params)
+        for illust in get_value(result, "illusts", []) or []:
+            illust_id = get_value(illust, "id")
+            if illust_id is None:
+                continue
+
+            source_post_id = str(illust_id)
+            if source_post_id in seen_post_ids:
+                continue
+            seen_post_ids.add(source_post_id)
+
+            image_urls = extract_image_urls(illust)
+            if not image_urls:
+                continue
+
+            user = get_value(illust, "user")
+            user_id = get_value(user, "id")
+            posts.append(
+                {
+                    "source_post_id": source_post_id,
+                    "source_post_url": f"https://www.pixiv.net/artworks/{source_post_id}",
+                    "liked_at": extract_liked_at(illust),
+                    "author_name": get_value(user, "name"),
+                    "author_id": str(user_id) if user_id is not None else None,
+                    "image_urls": image_urls,
+                    "raw_json": json.dumps(to_dict(illust), ensure_ascii=False, separators=(",", ":")),
                 }
-            }
-        } else if let Some(url) = illust
-            .meta_single_page
-            .as_ref()
-            .and_then(|single| single.original_image_url.as_deref())
-        {
-            urls.push(url.to_string());
-        } else if let Some(image_urls) = &illust.image_urls {
-            if let Some(url) = image_urls
-                .original
-                .as_deref()
-                .or(image_urls.large.as_deref())
-                .or(image_urls.medium.as_deref())
-            {
-                urls.push(url.to_string());
-            }
+            )
+
+        next_url = get_value(result, "next_url")
+        params = api.parse_qs(next_url)
+
+    sys.stdout.write(json.dumps(posts, ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as exc:
+        print(f"pixivpy3 error: {exc}", file=sys.stderr)
+        raise
+"#;
+
+        let user_id = self.user_id.clone().unwrap_or_default();
+        let output = Command::new("python3")
+            .arg("-c")
+            .arg(script)
+            .env("PIXIV_ACCESS_TOKEN", &self.access_token)
+            .env("PIXIV_USER_ID", user_id)
+            .output()
+            .await
+            .context("failed to execute python3 for pixivpy3")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow!(
+                "Python subprocess executing pixivpy3 failed: {stderr}"
+            ));
         }
 
-        let mut seen_urls = HashSet::new();
-        urls.into_iter()
-            .filter(|url| seen_urls.insert(url.clone()))
-            .collect()
-    }
+        let stdout =
+            String::from_utf8(output.stdout).context("pixivpy3 output was not valid UTF-8")?;
+        let posts: Vec<PythonPost> =
+            serde_json::from_str(&stdout).context("failed to parse pixivpy3 output JSON")?;
 
-    fn extract_liked_at(illust: &PixivIllust) -> Option<String> {
-        illust
-            .bookmark_date
-            .clone()
-            .or_else(|| {
-                illust
-                    .bookmark_metadata
-                    .as_ref()
-                    .and_then(|data| data.date.clone())
-            })
-            .or_else(|| {
-                illust
-                    .bookmark_metadata
-                    .as_ref()
-                    .and_then(|data| data.created_at.clone())
-            })
-            .or_else(|| illust.create_date.clone())
+        Ok(posts)
     }
 }
 
@@ -204,75 +230,33 @@ impl SourceAdapter for PixivAdapter {
     }
 
     async fn fetch_liked_posts(&self, since: Option<&str>) -> Result<Vec<SourcePost>> {
-        let user_id = self.resolve_user_id().await?;
-        let mut next_url = Some(format!(
-            "https://app-api.pixiv.net/v1/user/bookmarks/illust?user_id={user_id}&restrict=public"
-        ));
-        let mut posts = Vec::new();
-        let mut seen_post_ids = HashSet::new();
+        let posts = self.fetch_with_pixivpy3().await?;
         let since_ts = Self::parse_since(since);
 
-        while let Some(url) = next_url.take() {
-            let response: PixivBookmarksResponse = self
-                .request_builder(&url)
-                .send()
-                .await?
-                .error_for_status()?
-                .json()
-                .await
-                .with_context(|| format!("Failed to parse Pixiv bookmarks response: {url}"))?;
-
-            let PixivBookmarksResponse {
-                illusts,
-                next_url: new_next_url,
-            } = response;
-
-            for illust in illusts {
-                let source_post_id = illust.id.to_string();
-                if !seen_post_ids.insert(source_post_id.clone()) {
-                    continue;
-                }
-
-                let liked_at = Self::extract_liked_at(&illust);
-                if !Self::is_since_included(since_ts.as_ref(), liked_at.as_deref()) {
-                    continue;
-                }
-
-                let image_urls = Self::extract_image_urls(&illust);
-                if image_urls.is_empty() {
-                    continue;
-                }
-
-                let raw_json = serde_json::to_string(&illust).ok();
-                let (author_name, author_source_id, author_url) = illust
-                    .user
-                    .as_ref()
-                    .map(|u| {
-                        (
-                            u.name.clone(),
-                            Some(u.id.to_string()),
-                            Some(format!("https://www.pixiv.net/users/{}", u.id)),
-                        )
-                    })
-                    .unwrap_or((None, None, None));
-
-                posts.push(SourcePost {
-                    source_type: self.source_type().to_string(),
-                    source_post_id: source_post_id.clone(),
-                    source_post_url: format!("https://www.pixiv.net/artworks/{source_post_id}"),
-                    liked_at,
-                    author_name,
-                    author_source_id,
-                    author_url,
-                    image_urls,
-                    raw_json,
-                });
+        let mut result = Vec::with_capacity(posts.len());
+        for post in posts {
+            if !Self::is_since_included(since_ts.as_ref(), post.liked_at.as_deref()) {
+                continue;
             }
 
-            next_url = new_next_url;
+            let image_urls = post.image_urls;
+            if image_urls.is_empty() {
+                continue;
+            }
+
+            result.push(SourcePost {
+                source_type: self.source_type().to_string(),
+                source_post_id: post.source_post_id,
+                source_post_url: post.source_post_url,
+                liked_at: post.liked_at,
+                author_name: post.author_name,
+                author_id: post.author_id,
+                image_urls,
+                raw_json: post.raw_json,
+            });
         }
 
-        Ok(posts)
+        Ok(result)
     }
 
     async fn download_image(&self, url: &str) -> Result<(Bytes, String)> {
