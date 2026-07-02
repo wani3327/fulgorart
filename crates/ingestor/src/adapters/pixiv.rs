@@ -244,16 +244,17 @@ impl SourceAdapter for PixivAdapter {
                 continue;
             }
 
-            result.push(SourcePost {
-                source_type: self.source_type().to_string(),
-                source_post_id: post.source_post_id,
-                source_post_url: post.source_post_url,
-                liked_at: post.liked_at,
-                author_name: post.author_name,
-                author_id: post.author_id,
-                image_urls,
-                raw_json: post.raw_json,
-            });
+            todo!()
+            // result.push(SourcePost {
+            //     source_type: self.source_type().to_string(),
+            //     source_post_id: post.source_post_id,
+            //     source_post_url: post.source_post_url,
+            //     liked_at: post.liked_at,
+            //     author_name: post.author_name,
+            //     author_source_id: post.author_id,
+            //     image_urls,
+            //     raw_json: post.raw_json,
+            // });
         }
 
         Ok(result)
