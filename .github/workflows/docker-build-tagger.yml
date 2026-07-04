@@ -3,9 +3,11 @@ name: Build and Push Docker Image
 on:
   push:
     branches:
-      - main  # Change to your default branch (e.g., master)
+      - main
     paths:
-      - 'path/to/your/directory/**'  # 👈 ONLY trigger if files under this dir change
+      - './crates/tagger'
+      - './crates/storage'
+  workflow_dispatch:
 
 jobs:
   build-and-push:
