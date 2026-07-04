@@ -1379,6 +1379,7 @@ dependencies = [
  "dotenvy",
  "fulgorart-db",
  "fulgorart-storage",
+ "fulgorart-tagger",
  "google-cloud-logging-v2",
  "google-cloud-lro",
  "google-cloud-run-v2",

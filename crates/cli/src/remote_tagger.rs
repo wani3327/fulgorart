@@ -1,6 +1,13 @@
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
+use serde::Deserialize;
 
-use fulgorart_db::Db;
+use fulgorart_db::{Db, TagJobWithKey};
+
+#[derive(Deserialize)]
+struct TagResult {
+    key: String,
+    tags: Vec<fulgorart_tagger::TagPrediction>,
+}
 
 pub struct RunTaggerJobTool {
     pub project_id: String,
@@ -56,12 +63,12 @@ impl RunTaggerJobTool {
         }
     }
 
-    async fn trigger_job(&self, pending_jobs: &Vec<fulgorart_db::TagJobWithKey>) -> Result<google_cloud_run_v2::model::Execution> {
+    async fn trigger_job(
+        &self,
+        pending_jobs: &Vec<fulgorart_db::TagJobWithKey>,
+    ) -> Result<google_cloud_run_v2::model::Execution> {
         use google_cloud_lro::Poller;
-        use google_cloud_run_v2::{
-            client::Jobs,
-            model::run_job_request::Overrides,
-        };
+        use google_cloud_run_v2::{client::Jobs, model::run_job_request::Overrides};
 
         // Initialize the Cloud Run Admin API client
         let client = Jobs::builder().build().await?;
@@ -72,7 +79,11 @@ impl RunTaggerJobTool {
         );
 
         let co = google_cloud_run_v2::model::run_job_request::overrides::ContainerOverride::new()
-            .set_args(pending_jobs.iter().map(|job| format!("r2://{}", job.s3_key)));
+            .set_args(
+                pending_jobs
+                    .iter()
+                    .map(|job| format!("r2://{}", job.s3_key)),
+            );
 
         // let co = overrides::ContainerOverride::new().set_args(Vec::<String>::new());
 
@@ -98,19 +109,27 @@ impl RunTaggerJobTool {
             // return Ok(())
         }
 
+        let pending_jobs = vec![TagJobWithKey {
+            job_id: 0,
+            image_id: 0,
+            s3_key: "119053188_p0.jpg".to_string(),
+        }];
+
         let execution = self.trigger_job(&pending_jobs).await?;
         let task_id = execution
             .name
             .split("/")
             .last()
             .ok_or(anyhow::anyhow!("Invalid task name"))?;
+        println!("task id: {task_id}");
+
         let entries = self.retrieve_log(task_id).await?;
-        // let entries = self.retrieve_log("fulgorart-tagger-bgtlc").await?;
+        // let entries = self.retrieve_log("fulgorart-tagger-78tkn").await?;
 
         let find_ids = |key: &str| {
             for job in &pending_jobs {
                 if key == job.s3_key {
-                    return Some((job.job_id, job.image_id))
+                    return Some((job.job_id, job.image_id));
                 }
             }
             None
@@ -118,24 +137,27 @@ impl RunTaggerJobTool {
 
         for entry in entries {
             let (job_id, image_id, tags) = || -> _ {
-                let json = entry.json_payload()?;
-                let s3_key = json.get("key")?.as_str()?;
-                let tags = json.get("tags")?.as_array()?;
-                let (job_id, image_id) = find_ids(s3_key)?;
-                Some((job_id, image_id, tags))
-            }().ok_or(anyhow!("json parse failed"))?;
+                let message = entry.json_payload()?.get("message")?.as_str()?;
+                let res: TagResult = serde_json::from_str(message).ok()?;
+                let (job_id, image_id) = find_ids(&res.key)?;
+                Some((job_id, image_id, res.tags))
+            }()
+            .ok_or(anyhow!("json parse failed {entry:?}"))?;
 
             for prediction in tags {
-                let (tag_id, score) = || -> _ {
-                    let tag_id = prediction.get("tag_id")?.as_i64()?;
-                    let score = prediction.get("score")?.as_f64()?;
-                    Some((tag_id, score))
-                }().ok_or(anyhow!("TagPrediction parse failed"))?;
-
-                db_connection.insert_image_tag(image_id, tag_id, "wd-swinv2", Some(score)).await?; // TODO: model info should be fetched
+                db_connection
+                    .insert_image_tag(
+                        image_id,
+                        prediction.tag_id,
+                        "wd-swinv2",
+                        Some(prediction.score as f64),
+                    )
+                    .await?; // TODO: model info should be fetched
             }
 
-            db_connection.update_tag_job_status(job_id, "tagged", None).await? // TODO: update tag parse failure error msg to DB 
+            db_connection
+                .update_tag_job_status(job_id, "tagged", None)
+                .await? // TODO: update tag parse failure error msg to DB
         }
 
         Ok(())

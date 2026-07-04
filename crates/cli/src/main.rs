@@ -1,4 +1,4 @@
-mod tagger;
+mod remote_tagger;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -165,7 +165,7 @@ async fn main() -> Result<()> {
         }
 
         Commands::SearchTags { query } => {
-            let x = tagger::RunTaggerJobTool {
+            let x = remote_tagger::RunTaggerJobTool {
                 project_id: "development-493004".to_string(),
                 location: "us-west1".to_string(),
                 job_name: "fulgorart-tagger".to_string(),

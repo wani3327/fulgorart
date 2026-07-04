@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::path::PathBuf;
 
-use fulgorart_ingestor::{PixivAdapter, TwitterAdapter, grab, save_grabbed_posts};
+use fulgorart_ingestor::{grab, save_grabbed_posts, PixivAdapter, TwitterAdapter};
 
 fn output_dir_from_args(default_output_dir: &str) -> PathBuf {
     let mut args = std::env::args().skip(1);

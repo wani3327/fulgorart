@@ -10,6 +10,7 @@ path = "src/main.rs"
 [dependencies]
 fulgorart-db = { path = "../db" }
 fulgorart-storage = { path = "../storage" }
+fulgorart-tagger = { path = "../tagger" }
 clap = { version = "4", features = ["derive"] }
 tokio = { workspace = true }
 serde = { workspace = true }
