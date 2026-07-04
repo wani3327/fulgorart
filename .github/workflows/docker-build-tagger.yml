@@ -5,8 +5,8 @@ on:
     branches:
       - main
     paths:
-      - './crates/tagger'
-      - './crates/storage'
+      - './crates/tagger/**'
+      - './crates/storage/**'
   workflow_dispatch:
 
 jobs:

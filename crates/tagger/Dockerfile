@@ -14,7 +14,7 @@ RUN apt-get update \
 RUN curl -fL https://github.com/microsoft/onnxruntime/releases/download/v1.27.0/onnxruntime-linux-x64-1.27.0.tgz \
     | tar -xzf - --strip-components=1 "onnxruntime-linux-x64-1.27.0/lib"
 RUN curl -fLo wd-swinv2.onnx https://huggingface.co/SmilingWolf/wd-swinv2-tagger-v3/resolve/main/model.onnx?download=true
-RUN curl -fLo selected_tags https://huggingface.co/SmilingWolf/wd-swinv2-tagger-v3/resolve/main/selected_tags.csv?download=true
+RUN curl -fLo selected_tags.csv https://huggingface.co/SmilingWolf/wd-swinv2-tagger-v3/resolve/main/selected_tags.csv?download=true
 
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
