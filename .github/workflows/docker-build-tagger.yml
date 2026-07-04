@@ -1,0 +1,42 @@
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches:
+      - main  # Change to your default branch (e.g., master)
+    paths:
+      - 'path/to/your/directory/**'  # 👈 ONLY trigger if files under this dir change
+
+jobs:
+  build-and-push:
+    runs-on: debian-latest
+
+    steps:
+      # 1. Checkout the repository code
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Set up Docker Buildx (required for caching and advanced features)
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # 3. Log in to Docker Hub
+      # Ensure you add DOCKERHUB_USERNAME and DOCKERHUB_TOKEN to your GitHub repo secrets
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # 4. Build the image and push it
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .  # Change to your specific directory if the Dockerfile is in there
+          file: ./crates/tagger/Dockerfile  # Path to your Dockerfile
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/my-app:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/my-app:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

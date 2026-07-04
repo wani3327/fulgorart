@@ -11,27 +11,28 @@ RUN apt-get update \
 
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-COPY models ./models
-# TODO curl from external repo rather than copy from local
-COPY crates/tagger/onnxruntime-linux-x64-1.24.4 ./onnxruntime-linux-x64-1.24.4
 
-RUN cargo build --release --locked -p fulgorart-tagger
+RUN cargo build --release --locked -p fulgorart-tagger --features gcp
 
 FROM debian:bookworm-slim AS runtime
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
+        tar \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-COPY --from=builder /app/target/release/fulgorart-tagger /usr/local/bin/fulgorart-tagger
-COPY --from=builder /app/models /app/models
-COPY --from=builder /app/onnxruntime-linux-x64-1.24.4/lib/libonnxruntime.so.1.24.4 /opt/onnxruntime/lib/libonnxruntime.so.1.24.4
+RUN curl -fL https://github.com/microsoft/onnxruntime/releases/download/v1.27.0/onnxruntime-linux-x64-1.27.0.tgz \
+    | tar -xzf - --strip-components=1 "lib"
+RUN curl -fLo wd-swinv2.onnx https://huggingface.co/SmilingWolf/wd-swinv2-tagger-v3/resolve/main/model.onnx?download=true
+RUN curl -fLo selected_tags https://huggingface.co/SmilingWolf/wd-swinv2-tagger-v3/resolve/main/selected_tags.csv?download=true
 
-ENV ORT_DYLIB_PATH=/opt/onnxruntime/lib/libonnxruntime.so.1.24.4 \
-    WD14_MODEL_PATH=/app/models/wd-swinv2.onnx \
-    WD14_LABELS_PATH=/app/models/selected_tags.csv
+COPY --from=builder /app/target/release/fulgorart-tagger /usr/local/bin/fulgorart-tagger
+
+ENV ORT_DYLIB_PATH=/app/lib/libonnxruntime.so \
+    WD14_MODEL_PATH=/app/wd-swinv2.onnx \
+    WD14_LABELS_PATH=/app/selected_tags.csv
 
 ENTRYPOINT ["fulgorart-tagger"]
