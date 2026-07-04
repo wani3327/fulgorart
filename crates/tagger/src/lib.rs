@@ -30,7 +30,7 @@ struct LabelEntry {
 }
 
 impl LabelEntry {
-    fn category_str(&self) -> &'static str {
+    fn _category_str(&self) -> &'static str {
         match self.category {
             0 => "general",
             1 => "artist",

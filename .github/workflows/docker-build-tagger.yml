@@ -38,7 +38,6 @@ jobs:
           file: ./crates/tagger/Dockerfile  # Path to your Dockerfile
           push: true
           tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/my-app:latest
-            ${{ secrets.DOCKERHUB_USERNAME }}/my-app:${{ github.sha }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/fulgorart-tagger:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max

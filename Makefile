@@ -39,7 +39,7 @@ run-web:
 	cargo run --bin fulgorart-web
 
 run-cli:
-	GOOGLE_APPLICATION_CREDENTIALS=/home/ubuntu/fulgorart/development-493004-1f72f74562c7.json cargo run --bin fulgorart-cli -- $(or $(ARGS),$(TARGET_ARGS))
+	GOOGLE_APPLICATION_CREDENTIALS=/home/ubuntu/fulgorart/development-493004-1f72f74562c7.json cargo run --bin fulgorart-cli --features gcp -- $(or $(ARGS),$(TARGET_ARGS))
 
 run-tagger:
 	ORT_DYLIB_PATH=/home/ubuntu/fulgorart/crates/tagger/onnxruntime-linux-x64-1.24.4/lib/libonnxruntime.so cargo run --bin fulgorart-tagger -- $(or $(ARGS),$(TARGET_ARGS))
