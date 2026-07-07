@@ -11,9 +11,8 @@ A personal art collection manager that grabs liked images from SNS, stores them 
 | `crates/storage` | Cloudflare R2 / S3 client and R2 config |
 | `crates/ingestor` | Independent image-grabber app; lib returns liked images as bytes, bin saves them to a directory |
 | `crates/tagger` | Independent WD14 tagger app for local files, URLs, or `r2://` keys |
-| `crates/bridge` | Orchestrator app; combines grabber + storage + tagger jobs and persists/applies tags |
 | `crates/web` | Axum web UI and REST API |
-| `crates/cli` | Local maintenance CLI |
+| `crates/cli` | Primary orchestration CLI with tool-style subcommands |
 
 ## Common environment variables
 
@@ -27,7 +26,7 @@ FULGORART_R2_ACCESS_KEY_ID=...
 FULGORART_R2_SECRET_ACCESS_KEY=...
 ```
 
-### Ingestor / bridge source credentials
+### Ingestor / CLI source credentials
 
 ```env
 PIXIV_ACCESS_TOKEN=...
@@ -35,13 +34,13 @@ PIXIV_USER_ID=...                # optional; auto-resolved when omitted
 TWITTER_BEARER_TOKEN=...
 ```
 
-### Bridge tagging
+### CLI tagger-tool
 
 ```env
 TAGGER_BATCH_SIZE=20
 ```
 
-### Bridge Cloud Run mode
+### CLI remote-tagger (future)
 
 ```env
 GCP_PROJECT_ID=my-project
@@ -84,18 +83,6 @@ cargo run --bin fulgorart-ingestor -- ./data/ingestor
 
 The binary saves files under `<output-dir>/<source_type>/<source_post_id>/`.
 
-## Run the bridge app
-
-Grab liked images, upload to R2, persist DB rows, queue tag jobs, and execute tagger jobs:
-
-```bash
-cargo run --bin fulgorart-bridge -- --tagger-mode local
-# or
-cargo run --bin fulgorart-bridge -- --tagger-mode cloud_run
-# or
-make run-bridge
-```
-
 ## Run the tagger app
 
 ```bash
@@ -122,21 +109,20 @@ Then open `http://localhost:3000`.
 ## CLI usage
 
 ```bash
-# Import a local image directly into DB + R2
-cargo run --bin fulgorart-cli -- import-image \
+# Register a local image into DB + R2 and queue a tag job
+cargo run --bin fulgorart-cli -- upload-tool \
   --file photo.jpg \
   --source-type pixiv \
   --source-post-id 12345 \
   --source-post-url https://www.pixiv.net/artworks/12345
 
-# List images
-cargo run --bin fulgorart-cli -- list-images
+# Process pending tag jobs with local WD14
+cargo run --bin fulgorart-cli -- tagger-tool --batch-size 20
 
-# Search tags
-cargo run --bin fulgorart-cli -- search-tags blue_hair
-
-# Manually add a tag
-cargo run --bin fulgorart-cli -- add-tag --image-id 1 --tag blue_hair
+# Placeholder wrappers for future shell composition
+cargo run --bin fulgorart-cli -- gallery-dl -- --help
+cargo run --bin fulgorart-cli -- ingestor -- --help
+cargo run --bin fulgorart-cli -- remote-tagger -- --help
 ```
 
 ## REST API

@@ -1,4 +1,4 @@
-.PHONY: build build-tagger check test run-web run-cli run-tagger run-ingestor run-bridge docker-build-tagger docker-run-tagger docker-run-tagger-persist docker-tag-tagger docker-push-tagger docker-save-tagger docker-load-tagger
+.PHONY: build build-tagger check test run-web run-cli run-tagger run-ingestor run-upload-tool run-tagger-tool run-gallery-dl run-ingestor-tool run-remote-tagger docker-build-tagger docker-run-tagger docker-run-tagger-persist docker-tag-tagger docker-push-tagger docker-save-tagger docker-load-tagger
 
 TAGGER_IMAGE_NAME ?= fulgorart-tagger
 TAGGER_IMAGE_TAG ?= latest
@@ -13,7 +13,7 @@ DOCKERHUB_IMAGE ?= $(DOCKERHUB_USER)/$(TAGGER_IMAGE_NAME):$(TAGGER_IMAGE_TAG)
 #   make run-tagger -- ./examples/eru.jpg
 #   make docker-run-tagger -- https://example.com/a.jpg
 # Also supports ARGS="...".
-ARG_TARGETS := run-cli run-tagger docker-run-tagger docker-run-tagger-persist
+ARG_TARGETS := run-cli run-tagger run-upload-tool run-tagger-tool run-gallery-dl run-ingestor-tool run-remote-tagger docker-run-tagger docker-run-tagger-persist
 ifneq (,$(filter $(firstword $(MAKECMDGOALS)),$(ARG_TARGETS)))
 TARGET_ARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
 
@@ -47,8 +47,20 @@ run-tagger:
 run-ingestor:
 	cargo run --bin fulgorart-ingestor
 
-run-bridge:
-	GOOGLE_APPLICATION_CREDENTIALS=development-493004-1f72f74562c7.json cargo run --bin fulgorart-bridge -- --tagger-mode cloud_run
+run-upload-tool:
+	GOOGLE_APPLICATION_CREDENTIALS=/home/ubuntu/fulgorart/development-493004-1f72f74562c7.json cargo run --bin fulgorart-cli -- upload-tool $(or $(ARGS),$(TARGET_ARGS))
+
+run-tagger-tool:
+	GOOGLE_APPLICATION_CREDENTIALS=/home/ubuntu/fulgorart/development-493004-1f72f74562c7.json cargo run --bin fulgorart-cli -- tagger-tool $(or $(ARGS),$(TARGET_ARGS))
+
+run-gallery-dl:
+	GOOGLE_APPLICATION_CREDENTIALS=/home/ubuntu/fulgorart/development-493004-1f72f74562c7.json cargo run --bin fulgorart-cli -- gallery-dl $(or $(ARGS),$(TARGET_ARGS))
+
+run-ingestor-tool:
+	GOOGLE_APPLICATION_CREDENTIALS=/home/ubuntu/fulgorart/development-493004-1f72f74562c7.json cargo run --bin fulgorart-cli -- ingestor $(or $(ARGS),$(TARGET_ARGS))
+
+run-remote-tagger:
+	GOOGLE_APPLICATION_CREDENTIALS=/home/ubuntu/fulgorart/development-493004-1f72f74562c7.json cargo run --bin fulgorart-cli -- remote-tagger $(or $(ARGS),$(TARGET_ARGS))
 
 docker-build-tagger:
 	docker build -f crates/tagger/Dockerfile -t $(TAGGER_IMAGE) .

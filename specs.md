@@ -14,7 +14,7 @@ Build a **private** application that:
 5. Lets the user review and manually edit tags later.
 6. Provides a web UI for browsing and search.
 
-MVP focus: **reliable image grabbing + bridge orchestration + storage + tagging + browse UI**.
+MVP focus: **reliable image grabbing + CLI orchestration + storage + tagging + browse UI**.
 
 ## 2. High-level Architecture
 
@@ -32,18 +32,11 @@ MVP focus: **reliable image grabbing + bridge orchestration + storage + tagging 
   - Emits JSON lines with tag predictions for each input.
   - Must not own DB reads/writes or queue management.
 
-- **Bridge** (`crates/bridge`, Rust)
-  - Orchestrator app.
-  - Calls the ingestor library as its image-grabber.
-  - Uploads grabbed images with `fulgorart-storage`.
-  - Creates and updates DB rows with `fulgorart-db`.
-  - Queues pending tag jobs.
-  - Executes tagging behind a `TaggerJob` trait.
-  - Supports at least two `TaggerJob` implementations:
-    - local tagging by calling `fulgorart-tagger` library code
-    - Cloud Run tagging by calling GCP Cloud Run Job
-  - Stores returned tags and updates tag job status.
-  - Internally separates image-grabber, storage, and tagger responsibilities behind traits.
+- **CLI orchestration** (`crates/cli`, Rust)
+  - Primary workflow entrypoint.
+  - Owns tool-style subcommands for upload, tagging, and future script wrappers.
+  - Upload path persists rows with `fulgorart-db`, uploads objects with `fulgorart-storage`, and queues tag jobs.
+  - Tagger path consumes pending jobs, runs WD14 via `fulgorart-tagger`, stores returned tags, and updates job state.
 
 - **Web app**
   - Serves pages for browsing images.
@@ -133,8 +126,8 @@ Fields:
 - `created_at`, `updated_at`
 
 Behavior:
-- Bridge owns queue creation and status updates.
-- Only one effective tag job should exist per image for the normal bridge flow.
+- CLI owns queue creation and status updates.
+- Only one effective tag job should exist per image for the normal CLI flow.
 
 ## 4. Tagging (WD14)
 
@@ -154,7 +147,7 @@ Behavior:
   - public URL
   - `r2://` object key
 - Tagger output is one JSON object per processed input.
-- Bridge consumes the JSON output and writes DB state.
+- CLI tooling consumes tagging output and writes DB state.
 
 ## 5. Web UI (MVP)
 
@@ -171,7 +164,7 @@ Behavior:
 - AND semantics for included tags.
 - NOT semantics for excluded tags.
 
-## 6. Image grabbing and bridge flow
+## 6. Image grabbing and CLI flow
 
 ### 6.1 Source support strategy
 Because Twitter/X and Pixiv APIs can be restricted, image grabbing should be adapter-based.
@@ -181,16 +174,16 @@ Because Twitter/X and Pixiv APIs can be restricted, image grabbing should be ada
   - download original images
 
 ### 6.2 End-to-end flow
-1. Bridge calls ingestor adapters.
+1. CLI calls ingestor adapters (or compatible wrapper flows).
 2. Ingestor returns grabbed posts and image bytes.
-3. Bridge uploads images to R2.
-4. Bridge persists `post`, `image_asset`, and `tag_job` rows.
-5. Bridge invokes the configured `TaggerJob` strategy.
+3. CLI uploads images to R2.
+4. CLI persists `post`, `image_asset`, and `tag_job` rows.
+5. CLI invokes the configured tagging strategy.
 6. `TaggerJob` runs tagging (local or Cloud Run) and returns results.
-7. Bridge stores tags and updates queue state.
+7. CLI stores tags and updates queue state.
 
 ### 6.3 Idempotency
-- Bridge must be safe to run repeatedly.
+- CLI workflow must be safe to run repeatedly.
 - Existing `post` rows should be updated rather than duplicated.
 - Existing `image_asset` rows keyed by `sha256` should be reused.
 - Bridge should avoid spawning redundant tag jobs for the same image in the normal path.
@@ -232,23 +225,23 @@ Recommended canonical key:
 
 ### Milestone 2 — WD14 tagging pipeline ✅
 - Make `fulgorart-tagger` process explicit inputs independently
-- Store tags + scores through bridge-owned orchestration
+- Store tags + scores through CLI-owned orchestration
 
 ### Milestone 3 — Web gallery + detail pages
 - Browse images
 - Filter by tags
 - Manual tag editing
 
-### Milestone 4 — Source image-grabber + bridge orchestration
+### Milestone 4 — Source image-grabber + CLI orchestration
 - Implement at least one source adapter end-to-end
 - Run `fulgorart-ingestor` independently for local dumps
-- Run `fulgorart-bridge` for production orchestration
-- Keep repeated bridge runs idempotent enough for scheduled execution
+- Run `fulgorart-cli` tool subcommands for production orchestration
+- Keep repeated CLI runs idempotent enough for scheduled execution
 
 ## 11. Acceptance criteria
 
 - `fulgorart-ingestor` can grab at least one source and save images to a directory.
-- `fulgorart-bridge` can ingest grabbed results into R2 and SQLite.
+- `fulgorart-cli upload-tool` can ingest local results into R2 and SQLite.
 - `fulgorart-tagger` can tag provided local paths, URLs, and `r2://` keys.
-- Bridge can apply returned WD14 tags and update tag-job status.
+- `fulgorart-cli tagger-tool` can apply returned WD14 tags and update tag-job status.
 - Web UI can browse images and persist manual tag edits.
