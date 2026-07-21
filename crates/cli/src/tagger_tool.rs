@@ -84,8 +84,13 @@ async fn apply_job_tags(
         let tag_row = db
             .get_or_create_tag(&label.name, Some(&label.category))
             .await?;
-        db.insert_image_tag(job.image_id, tag_row.id, "wd14", Some(prediction.score as f64))
-            .await?;
+        db.insert_image_tag(
+            job.image_id,
+            tag_row.id,
+            "wd14",
+            Some(prediction.score as f64),
+        )
+        .await?;
     }
 
     Ok(())
@@ -104,7 +109,8 @@ pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
         }
 
         for job in &jobs {
-            db.update_tag_job_status(job.job_id, "running", None).await?;
+            db.update_tag_job_status(job.job_id, "running", None)
+                .await?;
         }
 
         for job in &jobs {
