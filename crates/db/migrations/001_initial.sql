@@ -14,24 +14,26 @@ CREATE TABLE IF NOT EXISTS post (
     source_type TEXT NOT NULL,
     source_post_id TEXT NOT NULL,
     source_post_url TEXT NOT NULL,
-    liked_at TEXT,
     author_id INTEGER REFERENCES author(id),
+    title TEXT,
+    caption TEXT,
+    uploaded_at TEXT,
     raw_json TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(source_type, source_post_id)
 );
 
 CREATE TABLE IF NOT EXISTS image_asset (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     post_id INTEGER REFERENCES post(id),
-    sha256 TEXT NOT NULL UNIQUE,
     s3_key TEXT NOT NULL,
+    filename TEXT,
+    source_url TEXT,
     width INTEGER,
     height INTEGER,
     file_size INTEGER,
     content_type TEXT NOT NULL DEFAULT 'image/jpeg',
-    source_url TEXT,
+    sha256 TEXT NOT NULL UNIQUE,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
