@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS author (
     source_author_id TEXT NOT NULL,
     name TEXT,
     url TEXT,
+    profile_url TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(source_type, source_author_id)
@@ -58,7 +59,7 @@ CREATE TABLE IF NOT EXISTS image_tag (
 CREATE TABLE IF NOT EXISTS tag_job (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     image_id INTEGER NOT NULL REFERENCES image_asset(id) ON DELETE CASCADE,
-    status TEXT NOT NULL DEFAULT 'pending',
+    status TEXT NOT NULL DEFAULT 'uploaded',
     error TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))

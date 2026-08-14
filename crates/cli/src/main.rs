@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 use fulgorart_db::{Db, DbConfig};
 use fulgorart_storage::{R2Client, R2Config};
 
-mod gallery_dl;
+mod gallery_dl_tool;
 mod ingestor;
 mod remote_tagger_tool;
 mod tagger_tool;
@@ -20,10 +20,10 @@ struct Cli {
 enum Commands {
     /// Register a local image into DB + storage and queue tagging
     UploadTool(upload_tool::Args),
-    /// Process pending tag jobs with the local WD14 tagger
+    /// Process uploaded tag jobs with the local WD14 tagger
     TaggerTool(tagger_tool::Args),
-    /// Placeholder wrapper for future gallery-dl orchestration
-    GalleryDl(gallery_dl::Args),
+    /// Import gallery-dl Pixiv JSON and downloaded files into the DB
+    GalleryDl(gallery_dl_tool::Args),
     /// Placeholder wrapper for future fulgorart-ingestor orchestration
     Ingestor(ingestor::Args),
     /// Placeholder wrapper for future Cloud Run tagging orchestration
@@ -62,7 +62,11 @@ async fn main() -> Result<()> {
             let r2 = connect_r2().await?;
             tagger_tool::run(args, &db, &r2).await?;
         }
-        Commands::GalleryDl(args) => gallery_dl::run(args)?,
+        Commands::GalleryDl(args) => {
+            let db = connect_db().await?;
+            let r2 = connect_r2().await?;
+            gallery_dl_tool::run(args, &db, &r2).await?;
+        }
         Commands::Ingestor(args) => ingestor::run(args)?,
         Commands::RemoteTagger => {
             let db = connect_db().await?;

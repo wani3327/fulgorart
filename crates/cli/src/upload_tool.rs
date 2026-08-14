@@ -62,7 +62,7 @@ pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
         Err(_) => (None, None),
     };
 
-    let key = R2Client::canonical_key(&args.source_type, &sha256, &ext);
+    let key = ""; //R2Client::canonical_key(&args.source_type, &sha256, &ext);
     let r2_url = r2.object_url(&key);
     r2.upload(&key, bytes, content_type)
         .await

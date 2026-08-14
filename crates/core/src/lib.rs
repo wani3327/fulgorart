@@ -59,18 +59,20 @@ impl std::str::FromStr for TagSource {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum JobStatus {
-    Pending,
+    Uploading,
+    Uploaded,
     Running,
-    Done,
+    Tagged,
     Failed,
 }
 
 impl std::fmt::Display for JobStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            JobStatus::Pending => write!(f, "pending"),
+            JobStatus::Uploading => write!(f, "uploading"),
+            JobStatus::Uploaded => write!(f, "uploaded"),
             JobStatus::Running => write!(f, "running"),
-            JobStatus::Done => write!(f, "done"),
+            JobStatus::Tagged => write!(f, "tagged"),
             JobStatus::Failed => write!(f, "failed"),
         }
     }
@@ -81,9 +83,10 @@ impl std::str::FromStr for JobStatus {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "pending" => Ok(JobStatus::Pending),
+            "uploading" => Ok(JobStatus::Uploading),
+            "uploaded" => Ok(JobStatus::Uploaded),
             "running" => Ok(JobStatus::Running),
-            "done" => Ok(JobStatus::Done),
+            "tagged" => Ok(JobStatus::Tagged),
             "failed" => Ok(JobStatus::Failed),
             _ => Err(anyhow::anyhow!("Unknown job status: {s}")),
         }

@@ -104,7 +104,7 @@ pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
     loop {
         let jobs = db.get_pending_tag_jobs_with_keys(batch_size).await?;
         if jobs.is_empty() {
-            println!("no_pending_tag_jobs");
+            println!("no_uploaded_tag_jobs");
             break;
         }
 
@@ -126,7 +126,7 @@ pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
 
             match result {
                 Ok(()) => {
-                    db.update_tag_job_status(job.job_id, "done", None).await?;
+                    db.update_tag_job_status(job.job_id, "tagged", None).await?;
                     println!("tagged image_id={} key={}", job.image_id, job.s3_key);
                 }
                 Err(error) => {

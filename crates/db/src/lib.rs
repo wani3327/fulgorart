@@ -26,9 +26,10 @@ pub struct Db {
 pub struct AuthorRow {
     pub id: i64,
     pub source_type: String,
-    pub source_id: String,
+    pub source_author_id: String,
     pub name: Option<String>,
     pub url: Option<String>,
+    pub profile_url: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -39,11 +40,12 @@ pub struct PostRow {
     pub source_type: String,
     pub source_post_id: String,
     pub source_post_url: String,
-    pub liked_at: Option<String>,
     pub author_id: Option<i64>,
+    pub title: Option<String>,
+    pub caption: Option<String>,
+    pub uploaded_at: Option<String>,
     pub raw_json: Option<String>,
     pub created_at: String,
-    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize)]
@@ -52,6 +54,7 @@ pub struct ImageAssetRow {
     pub post_id: Option<i64>,
     pub sha256: String,
     pub s3_key: String,
+    pub filename: Option<String>,
     pub width: Option<i64>,
     pub height: Option<i64>,
     pub file_size: Option<i64>,
@@ -116,6 +119,12 @@ pub struct ImageAssetWithTags {
     pub tags: Vec<TagRow>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ClaimedImageUpload {
+    pub asset: ImageAssetRow,
+    pub job: TagJobRow,
+}
+
 impl Db {
     #[instrument(skip(path))]
     pub async fn connect(path: &str) -> Result<Self> {
@@ -134,42 +143,33 @@ impl Db {
     pub async fn upsert_author(
         &self,
         source_type: &str,
-        source_id: &str,
+        source_author_id: &str,
         name: Option<&str>,
         url: Option<&str>,
     ) -> Result<AuthorRow> {
-        let result = sqlx::query(
-            "INSERT INTO author (source_type, source_id, name, url)
+        sqlx::query(
+            "INSERT INTO author (source_type, source_author_id, name, url)
              VALUES (?, ?, ?, ?)
-             ON CONFLICT(source_type, source_id) DO UPDATE SET
+             ON CONFLICT(source_type, source_author_id) DO UPDATE SET
                name = COALESCE(excluded.name, author.name),
                url = COALESCE(excluded.url, author.url),
                updated_at = datetime('now')",
         )
         .bind(source_type)
-        .bind(source_id)
+        .bind(source_author_id)
         .bind(name)
         .bind(url)
         .execute(&self.pool)
         .await?;
 
-        let id = result.last_insert_rowid();
-        if id == 0 {
-            sqlx::query_as::<_, AuthorRow>(
-                "SELECT * FROM author WHERE source_type = ? AND source_id = ?",
-            )
-            .bind(source_type)
-            .bind(source_id)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(Into::into)
-        } else {
-            sqlx::query_as::<_, AuthorRow>("SELECT * FROM author WHERE id = ?")
-                .bind(id)
-                .fetch_one(&self.pool)
-                .await
-                .map_err(Into::into)
-        }
+        sqlx::query_as::<_, AuthorRow>(
+            "SELECT * FROM author WHERE source_type = ? AND source_author_id = ?",
+        )
+        .bind(source_type)
+        .bind(source_author_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(Into::into)
     }
 
     pub async fn insert_post(
@@ -183,46 +183,111 @@ impl Db {
         author_url: Option<&str>,
         raw_json: Option<&str>,
     ) -> Result<PostRow> {
+        self.insert_post_with_details(
+            source_type,
+            source_post_id,
+            source_post_url,
+            liked_at,
+            author_source_id,
+            author_name,
+            author_url,
+            None,
+            None,
+            None,
+            raw_json,
+        )
+        .await
+    }
+
+    pub async fn insert_post_with_details(
+        &self,
+        source_type: &str,
+        source_post_id: &str,
+        source_post_url: &str,
+        uploaded_at: Option<&str>,
+        author_source_id: Option<&str>,
+        author_name: Option<&str>,
+        author_url: Option<&str>,
+        author_profile_url: Option<&str>,
+        title: Option<&str>,
+        caption: Option<&str>,
+        raw_json: Option<&str>,
+    ) -> Result<PostRow> {
         let author_id = match author_source_id {
-            Some(source_id) => Some(
-                self.upsert_author(source_type, source_id, author_name, author_url)
-                    .await?
-                    .id,
+            Some(source_author_id) => Some(
+                self.upsert_author_with_profile(
+                    source_type,
+                    source_author_id,
+                    author_name,
+                    author_url,
+                    author_profile_url,
+                )
+                .await?
+                .id,
             ),
             None => None,
         };
 
-        let result = sqlx::query(
-            "INSERT INTO post (source_type, source_post_id, source_post_url, liked_at, author_id, raw_json)
-             VALUES (?, ?, ?, ?, ?, ?)
+        sqlx::query(
+            "INSERT INTO post (source_type, source_post_id, source_post_url, author_id, title, caption, uploaded_at, raw_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(source_type, source_post_id) DO UPDATE SET
                source_post_url = excluded.source_post_url,
-               liked_at = excluded.liked_at,
                author_id = excluded.author_id,
-               raw_json = excluded.raw_json,
-               updated_at = datetime('now')"
+               title = excluded.title,
+               caption = excluded.caption,
+               uploaded_at = excluded.uploaded_at,
+               raw_json = excluded.raw_json"
         )
         .bind(source_type)
         .bind(source_post_id)
         .bind(source_post_url)
-        .bind(liked_at)
         .bind(author_id)
+        .bind(title)
+        .bind(caption)
+        .bind(uploaded_at)
         .bind(raw_json)
         .execute(&self.pool)
         .await?;
 
-        let id = result.last_insert_rowid();
-        // If upsert updated an existing row, last_insert_rowid returns 0 or the existing row id
-        // So we need to fetch by source
-        if id == 0 {
-            self.get_post_by_source(source_type, source_post_id)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("Post not found after insert"))
-        } else {
-            self.get_post_by_id(id)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("Post not found after insert"))
-        }
+        self.get_post_by_source(source_type, source_post_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Post not found after insert"))
+    }
+
+    pub async fn upsert_author_with_profile(
+        &self,
+        source_type: &str,
+        source_author_id: &str,
+        name: Option<&str>,
+        url: Option<&str>,
+        profile_url: Option<&str>,
+    ) -> Result<AuthorRow> {
+        sqlx::query(
+            "INSERT INTO author (source_type, source_author_id, name, url, profile_url)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(source_type, source_author_id) DO UPDATE SET
+               name = COALESCE(excluded.name, author.name),
+               url = COALESCE(excluded.url, author.url),
+               profile_url = COALESCE(excluded.profile_url, author.profile_url),
+               updated_at = datetime('now')",
+        )
+        .bind(source_type)
+        .bind(source_author_id)
+        .bind(name)
+        .bind(url)
+        .bind(profile_url)
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query_as::<_, AuthorRow>(
+            "SELECT * FROM author WHERE source_type = ? AND source_author_id = ?",
+        )
+        .bind(source_type)
+        .bind(source_author_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(Into::into)
     }
 
     pub async fn get_post_by_id(&self, id: i64) -> Result<Option<PostRow>> {
@@ -261,17 +326,46 @@ impl Db {
         content_type: &str,
         source_url: Option<&str>,
     ) -> Result<ImageAssetRow> {
+        self.insert_image_asset_with_filename(
+            post_id,
+            sha256,
+            s3_key,
+            None,
+            width,
+            height,
+            file_size,
+            content_type,
+            source_url,
+        )
+        .await
+    }
+
+    pub async fn insert_image_asset_with_filename(
+        &self,
+        post_id: Option<i64>,
+        sha256: &str,
+        s3_key: &str,
+        filename: Option<&str>,
+        width: Option<i64>,
+        height: Option<i64>,
+        file_size: Option<i64>,
+        content_type: &str,
+        source_url: Option<&str>,
+    ) -> Result<ImageAssetRow> {
         sqlx::query(
-            "INSERT INTO image_asset (post_id, sha256, s3_key, width, height, file_size, content_type, source_url)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            "INSERT INTO image_asset (post_id, sha256, s3_key, filename, width, height, file_size, content_type, source_url)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(sha256) DO UPDATE SET
                 s3_key = excluded.s3_key,
                 post_id = COALESCE(image_asset.post_id, excluded.post_id),
+                filename = COALESCE(excluded.filename, image_asset.filename),
+                source_url = COALESCE(excluded.source_url, image_asset.source_url),
                 updated_at = datetime('now')"
         )
         .bind(post_id)
         .bind(sha256)
         .bind(s3_key)
+        .bind(filename)
         .bind(width)
         .bind(height)
         .bind(file_size)
@@ -293,6 +387,67 @@ impl Db {
             .fetch_optional(&self.pool)
             .await?;
         Ok(row)
+    }
+
+    pub async fn get_image_asset_by_sha256(&self, sha256: &str) -> Result<Option<ImageAssetRow>> {
+        let row = sqlx::query_as::<_, ImageAssetRow>("SELECT * FROM image_asset WHERE sha256 = ?")
+            .bind(sha256)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row)
+    }
+
+    pub async fn claim_image_asset_upload_with_filename(
+        &self,
+        post_id: Option<i64>,
+        sha256: &str,
+        s3_key: &str,
+        filename: Option<&str>,
+        width: Option<i64>,
+        height: Option<i64>,
+        file_size: Option<i64>,
+        content_type: &str,
+        source_url: Option<&str>,
+    ) -> Result<Option<ClaimedImageUpload>> {
+        let mut tx = self.pool.begin().await?;
+        let result = sqlx::query(
+            "INSERT OR IGNORE INTO image_asset (post_id, sha256, s3_key, filename, width, height, file_size, content_type, source_url)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        .bind(post_id)
+        .bind(sha256)
+        .bind(s3_key)
+        .bind(filename)
+        .bind(width)
+        .bind(height)
+        .bind(file_size)
+        .bind(content_type)
+        .bind(source_url)
+        .execute(&mut *tx)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            tx.commit().await?;
+            return Ok(None);
+        }
+
+        let asset =
+            sqlx::query_as::<_, ImageAssetRow>("SELECT * FROM image_asset WHERE sha256 = ?")
+                .bind(sha256)
+                .fetch_one(&mut *tx)
+                .await?;
+        let job_result =
+            sqlx::query("INSERT INTO tag_job (image_id, status) VALUES (?, 'uploading')")
+                .bind(asset.id)
+                .execute(&mut *tx)
+                .await?;
+        let job = sqlx::query_as::<_, TagJobRow>("SELECT * FROM tag_job WHERE id = ?")
+            .bind(job_result.last_insert_rowid())
+            .fetch_one(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
+        Ok(Some(ClaimedImageUpload { asset, job }))
     }
 
     pub async fn list_image_assets(&self, page: i64, per_page: i64) -> Result<Vec<ImageAssetRow>> {
@@ -483,7 +638,7 @@ impl Db {
     // ---- TagJob ----
 
     pub async fn insert_tag_job(&self, image_id: i64) -> Result<TagJobRow> {
-        let result = sqlx::query("INSERT INTO tag_job (image_id, status) VALUES (?, 'pending')")
+        let result = sqlx::query("INSERT INTO tag_job (image_id, status) VALUES (?, 'uploaded')")
             .bind(image_id)
             .execute(&self.pool)
             .await?;
@@ -498,7 +653,7 @@ impl Db {
 
     pub async fn get_pending_tag_jobs(&self, limit: i64) -> Result<Vec<TagJobRow>> {
         let rows = sqlx::query_as::<_, TagJobRow>(
-            "SELECT * FROM tag_job WHERE status = 'pending' ORDER BY created_at ASC LIMIT ?",
+            "SELECT * FROM tag_job WHERE status = 'uploaded' ORDER BY created_at ASC LIMIT ?",
         )
         .bind(limit)
         .fetch_all(&self.pool)
@@ -525,7 +680,7 @@ impl Db {
             "SELECT tj.id, tj.image_id, ia.s3_key
              FROM tag_job tj
              JOIN image_asset ia ON tj.image_id = ia.id
-             WHERE tj.status = 'pending'
+             WHERE tj.status = 'uploaded'
              ORDER BY tj.created_at ASC
              LIMIT ?",
         )
