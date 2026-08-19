@@ -187,9 +187,20 @@ impl PostInterest for (i64, String, PixivItem) {
 
 impl ItemInterest for (i64, String, PixivItem) {
     fn item(self) -> ItemInterested {
+        let filename = |s: &str| -> Option<String> {
+            if self.2.hash.len() == 0 {
+                return None;
+            }
+
+            let (left, right) = self.2.filename.rsplit_once('_')?;
+            let (name, hash) = left.rsplit_once('-')?;
+            Some(format!("{name}_{right}"))
+        }(&self.2.filename)
+        .unwrap_or(self.2.filename);
+
         ItemInterested {
             extension: self.2.extension,
-            filename: self.2.filename,
+            filename,
             url: self.1,
         }
     }
