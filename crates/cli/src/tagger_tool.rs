@@ -1,9 +1,10 @@
+use std::collections::HashMap;
+
 use anyhow::{Context, Result};
 use clap::Args as ClapArgs;
 use fulgorart_db::{Db, TagJobWithKey};
 use fulgorart_storage::R2Client;
 use fulgorart_tagger::Wd14Tagger;
-use std::collections::HashMap;
 
 #[derive(Debug, Clone, ClapArgs)]
 pub struct Args {

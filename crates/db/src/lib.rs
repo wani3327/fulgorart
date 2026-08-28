@@ -1,16 +1,25 @@
+use std::path::{Path, PathBuf};
+
 use anyhow::Result;
 
 #[derive(Debug, Clone)]
 pub struct DbConfig {
-    pub path: String,
+    pub path: PathBuf,
 }
 
 impl DbConfig {
     pub fn from_env() -> Self {
-        Self {
-            path: std::env::var("FULGORART_DB_PATH")
-                .unwrap_or_else(|_| "./data/fulgorart.db".to_string()),
-        }
+        let path = if let Ok(s) = std::env::var("FULGORART_DB_PATH") {
+            PathBuf::from(s)
+        } else if let Ok(s) = std::env::var("XDG_DATA_HOME") {
+            PathBuf::from(s).join("fulgorart.db")
+        } else if let Ok(s) = std::env::var("HOME") {
+            PathBuf::from(s).join(".local/share/fulgorart.db")
+        } else {
+            PathBuf::from("./fulgorart.db")
+        };
+
+        Self { path }
     }
 }
 
@@ -127,13 +136,13 @@ pub struct ClaimedImageUpload {
 
 impl Db {
     #[instrument(skip(path))]
-    pub async fn connect(path: &str) -> Result<Self> {
-        if let Some(parent) = std::path::Path::new(path).parent() {
+    pub async fn connect(path: &Path) -> Result<Self> {
+        if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
                 tokio::fs::create_dir_all(parent).await?;
             }
         }
-        let pool = SqlitePool::connect(&format!("sqlite://{}?mode=rwc", path)).await?;
+        let pool = SqlitePool::connect(&format!("sqlite://{}?mode=rwc", path.display())).await?;
         sqlx::migrate!().run(&pool).await?;
         Ok(Db { pool })
     }

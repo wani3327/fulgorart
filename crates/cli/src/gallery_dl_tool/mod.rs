@@ -1,4 +1,7 @@
+mod pixiv;
+
 use std::collections::HashMap;
+use std::io::{self, Read as _};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -13,16 +16,14 @@ use tokio::task::JoinSet;
 
 use pixiv::PixivGalleryDlJson3;
 
-mod pixiv;
-
 const MAX_CONCURRENT_UPLOADS: usize = 8;
 
 #[derive(Debug, Clone, ClapArgs)]
 pub struct Args {
     /// Directory containing files downloaded by gallery-dl
     pub image_dir: PathBuf,
-    /// gallery-dl JSON output that deserializes to PixivGalleryDlJson3
-    pub json_file: PathBuf,
+    /// gallery-dl JSON output that deserializes to PixivGalleryDlJson3. As file or from stdin
+    pub json_file: Option<PathBuf>,
 }
 
 pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
@@ -32,11 +33,18 @@ pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
             args.image_dir.display()
         )
     })?;
-    let json = tokio::fs::read_to_string(&args.json_file)
-        .await
-        .with_context(|| format!("Failed to read JSON file '{}'", args.json_file.display()))?;
-    let entries: PixivGalleryDlJson3 = serde_json::from_str(&json)
-        .with_context(|| format!("Failed to parse '{}'", args.json_file.display()))?;
+    let json = match &args.json_file {
+        Some(f) => tokio::fs::read_to_string(f)
+            .await
+            .with_context(|| format!("Failed to read JSON file '{}'", f.display()))?,
+        None => {
+            let mut input = String::new();
+            io::stdin().read_to_string(&mut input)?;
+            input
+        }
+    };
+    let entries: PixivGalleryDlJson3 =
+        serde_json::from_str(&json).with_context(|| format!("Failed to parse JSON"))?;
 
     let mut imported_posts = 0usize;
     let mut inserted_assets = 0usize;
@@ -81,22 +89,20 @@ pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
         };
 
         // read image
-        let Some(image_path) = image_paths
-            .get(&format!("{}.{}", item_info.filename, item_info.extension))
+        let Some(image_path) =
+            image_paths.get(&format!("{}.{}", item_info.filename, item_info.extension))
         else {
             println!(
                 "JSON references '{}', but it was not found under '{}'",
                 item_info.filename,
                 args.image_dir.display()
             );
-            continue
+            continue;
         };
 
-        let Ok(data) = tokio::fs::read(image_path)
-            .await
-        else {
+        let Ok(data) = tokio::fs::read(image_path).await else {
             println!("Failed to read image '{}'", image_path.display());
-            continue
+            continue;
         };
 
         // find metadata
