@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use bytes::Bytes;
-use fulgorart_storage::{R2Client, R2Config};
 use fulgorart_tagger::{TagPrediction, Wd14Tagger};
 use serde::Serialize;
 
@@ -10,22 +9,15 @@ fn print_usage() {
     eprintln!("  fulgorart-tagger a.jpg b.png                  # process multiple local files");
     eprintln!("  fulgorart-tagger https://example.com/img.jpg  # download and tag an image URL");
     eprintln!("  fulgorart-tagger <url1> <url2>                # process multiple URLs");
-    eprintln!("  fulgorart-tagger r2://images/photo.jpg        # fetch from Cloudflare R2 bucket");
-    eprintln!("  fulgorart-tagger r2://<key1> r2://<key2>      # process multiple R2 object keys");
 }
 
 fn is_url(s: &str) -> bool {
     s.starts_with("http://") || s.starts_with("https://")
 }
 
-fn is_r2_key(s: &str) -> bool {
-    s.starts_with("r2://")
-}
-
 enum CliMode {
     LocalPaths(Vec<String>),
     Urls(Vec<String>),
-    R2Keys(Vec<String>),
 }
 
 #[derive(Serialize)]
@@ -107,17 +99,14 @@ fn parse_args() -> Result<CliMode> {
     }
 
     let all_urls = items.iter().all(|s| is_url(s));
-    let all_r2 = items.iter().all(|s| is_r2_key(s));
-    let all_paths = items.iter().all(|s| !is_url(s) && !is_r2_key(s));
+    let all_paths = items.iter().all(|s| !is_url(s));
 
-    if all_r2 {
-        Ok(CliMode::R2Keys(items))
-    } else if all_urls {
+    if all_urls {
         Ok(CliMode::Urls(items))
     } else if all_paths {
         Ok(CliMode::LocalPaths(items))
     } else {
-        anyhow::bail!("Cannot mix local file paths, URLs, and R2 keys in the same invocation");
+        anyhow::bail!("Cannot mix local file paths and URLs in the same invocation");
     }
 }
 
@@ -162,33 +151,6 @@ async fn process_urls(tagger: &Wd14Tagger, urls: &[String]) -> Result<Vec<TagRes
     Ok(res)
 }
 
-fn r2_config_from_env() -> Result<R2Config> {
-    let config = R2Config::from_env();
-    if config.access_key_id.is_empty() || config.secret_access_key.is_empty() {
-        anyhow::bail!(
-            "FULGORART_R2_ACCESS_KEY_ID and FULGORART_R2_SECRET_ACCESS_KEY are required for R2 mode"
-        );
-    }
-    Ok(config)
-}
-
-async fn process_r2_keys(tagger: &Wd14Tagger, keys: &[String]) -> Result<Vec<TagResult>> {
-    let r2_config = r2_config_from_env()?;
-    let r2 = R2Client::new(&r2_config).await?;
-    let mut res = vec![];
-    for raw_key in keys {
-        let key = raw_key.strip_prefix("r2://").unwrap_or(raw_key);
-        tracing::debug!(%key, bucket = r2.bucket(), "Fetching image from R2");
-        let bytes = r2.download(key).await?;
-        let tags: Vec<TagPrediction> = tagger.tag(&bytes)?;
-        res.push(TagResult {
-            key: key.to_string(),
-            tags,
-        });
-    }
-    Ok(res)
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
@@ -198,7 +160,6 @@ async fn main() -> Result<()> {
     let res = match parse_args()? {
         CliMode::LocalPaths(paths) => process_paths(&tagger, &paths).await?,
         CliMode::Urls(urls) => process_urls(&tagger, &urls).await?,
-        CliMode::R2Keys(keys) => process_r2_keys(&tagger, &keys).await?,
     };
 
     let n = res.len();

@@ -1465,7 +1465,6 @@ dependencies = [
  "bytes",
  "csv",
  "dotenvy",
- "fulgorart-storage",
  "image",
  "ndarray",
  "ort",
@@ -1473,6 +1472,22 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "tracing-stackdriver",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "fulgorart-tagger-s3"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dotenvy",
+ "fulgorart-storage",
+ "fulgorart-tagger",
+ "serde",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-stackdriver",

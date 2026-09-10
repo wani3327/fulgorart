@@ -10,7 +10,8 @@ A personal art collection manager that grabs liked images from SNS, stores them 
 | `crates/db` | SQLite access layer and DB config |
 | `crates/storage` | Cloudflare R2 / S3 client and R2 config |
 | `crates/ingestor` | Independent image-grabber app; lib returns liked images as bytes, bin saves them to a directory |
-| `crates/tagger` | Independent WD14 tagger app for local files, URLs, or `r2://` keys |
+| `crates/tagger` | Independent WD14 tagger app for local files and URLs |
+| `crates/tagger_s3` | WD14 tagger runner for `r2://` keys (downloads from R2/S3 then tags) |
 | `crates/web` | Axum web UI and REST API |
 | `crates/cli` | Primary orchestration CLI with tool-style subcommands |
 
@@ -93,7 +94,7 @@ cargo run --bin fulgorart-tagger -- ./image.jpg ./other.png
 cargo run --bin fulgorart-tagger -- https://example.com/a.jpg
 
 # R2 keys
-cargo run --bin fulgorart-tagger -- r2://images/pixiv/2026/05/20/hash.jpg
+cargo run --bin fulgorart-tagger-s3 -- r2://images/pixiv/2026/05/20/hash.jpg
 ```
 
 ## Run the web server
