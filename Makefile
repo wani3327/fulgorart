@@ -39,28 +39,28 @@ run-web:
 	cargo run --bin fulgorart-web
 
 run-cli:
-	GOOGLE_APPLICATION_CREDENTIALS=/home/ubuntu/fulgorart/development-493004-1f72f74562c7.json cargo run --bin fulgorart-cli --features gcp -- $(or $(ARGS),$(TARGET_ARGS))
+	cargo run --bin fulgorart-cli --features gcp -- $(or $(ARGS),$(TARGET_ARGS))
 
 run-tagger:
-	ORT_DYLIB_PATH=/home/ubuntu/fulgorart/crates/tagger/onnxruntime-linux-x64-1.24.4/lib/libonnxruntime.so cargo run --bin fulgorart-tagger -- $(or $(ARGS),$(TARGET_ARGS))
+	cargo run --bin fulgorart-tagger -- $(or $(ARGS),$(TARGET_ARGS))
 
 run-ingestor:
 	cargo run --bin fulgorart-ingestor
 
 run-upload-tool:
-	GOOGLE_APPLICATION_CREDENTIALS=/home/ubuntu/fulgorart/development-493004-1f72f74562c7.json cargo run --bin fulgorart-cli -- upload-tool $(or $(ARGS),$(TARGET_ARGS))
+	cargo run --bin fulgorart-cli -- upload-tool $(or $(ARGS),$(TARGET_ARGS))
 
 run-tagger-tool:
-	GOOGLE_APPLICATION_CREDENTIALS=/home/ubuntu/fulgorart/development-493004-1f72f74562c7.json cargo run --bin fulgorart-cli -- tagger-tool $(or $(ARGS),$(TARGET_ARGS))
+	cargo run --bin fulgorart-cli -- tagger-tool $(or $(ARGS),$(TARGET_ARGS))
 
 run-gallery-dl:
-	GOOGLE_APPLICATION_CREDENTIALS=/home/ubuntu/fulgorart/development-493004-1f72f74562c7.json cargo run --bin fulgorart-cli -- gallery-dl $(or $(ARGS),$(TARGET_ARGS))
+	cargo run --bin fulgorart-cli -- gallery-dl $(or $(ARGS),$(TARGET_ARGS))
 
 run-ingestor-tool:
-	GOOGLE_APPLICATION_CREDENTIALS=/home/ubuntu/fulgorart/development-493004-1f72f74562c7.json cargo run --bin fulgorart-cli -- ingestor $(or $(ARGS),$(TARGET_ARGS))
+	cargo run --bin fulgorart-cli -- ingestor $(or $(ARGS),$(TARGET_ARGS))
 
 run-remote-tagger:
-	GOOGLE_APPLICATION_CREDENTIALS=/home/ubuntu/fulgorart/development-493004-1f72f74562c7.json cargo run --bin fulgorart-cli -- remote-tagger $(or $(ARGS),$(TARGET_ARGS))
+	cargo run --bin fulgorart-cli -- remote-tagger $(or $(ARGS),$(TARGET_ARGS))
 
 docker-build-tagger:
 	docker build -f crates/tagger/Dockerfile -t $(TAGGER_IMAGE) .

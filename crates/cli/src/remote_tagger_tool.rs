@@ -15,88 +15,98 @@ pub struct CloudRunJob {
     pub job_name: String,
 }
 
-async fn retrieve_log<T: AsRef<str>>(
-    cloud_run: &CloudRunJob,
-    task_id: T,
-) -> Result<Vec<google_cloud_logging_v2::model::LogEntry>> {
-    let client = google_cloud_logging_v2::client::LoggingServiceV2::builder()
-        .build()
-        .await?;
+impl CloudRunJob {
+    pub fn from_env() -> Result<Self> {
+        Ok(Self {
+            project_id: std::env::var("FULGORART_GCP_PROJECT_ID")?,
+            location: std::env::var("FULGORART_GCP_REGION")?,
+            job_name: std::env::var("FULGORART_CLOUD_RUN_JOB_NAME")?,
+        })
+    }
 
-    // 2. Build the Advanced Log Filter query
-    // This tells Cloud Logging exactly which Job Execution logs to fetch
-    let filter_query = format!(
-        "resource.type=\"cloud_run_job\" \
+    async fn retrieve_log<T: AsRef<str>>(
+        &self,
+        task_id: T,
+    ) -> Result<Vec<google_cloud_logging_v2::model::LogEntry>> {
+        let client = google_cloud_logging_v2::client::LoggingServiceV2::builder()
+            .build()
+            .await?;
+
+        // 2. Build the Advanced Log Filter query
+        // This tells Cloud Logging exactly which Job Execution logs to fetch
+        let filter_query = format!(
+            "resource.type=\"cloud_run_job\" \
         AND resource.labels.project_id=\"{}\" \
         AND resource.labels.location=\"{}\" \
         AND resource.labels.job_name=\"{}\" \
         AND labels.\"run.googleapis.com/execution_name\"=\"{}\"
         AND severity = NOTICE",
-        cloud_run.project_id,
-        cloud_run.location,
-        cloud_run.job_name,
-        task_id.as_ref()
-    );
-
-    let mut entries = Vec::new();
-    let mut page_token = String::new();
-
-    loop {
-        let response = client
-            .list_log_entries()
-            .set_resource_names(vec![format!("projects/{}", cloud_run.project_id)])
-            .set_filter(filter_query.clone())
-            .set_order_by("timestamp asc")
-            .set_page_token(page_token)
-            .send()
-            .await?;
-
-        entries.extend(response.entries.iter().cloned());
-        println!("entries: {} -> {}", response.entries.len(), entries.len());
-
-        if response.next_page_token.is_empty() {
-            return Ok(entries);
-        }
-
-        page_token = response.next_page_token;
-    }
-}
-
-async fn trigger_job(
-    cloud_run: &CloudRunJob,
-    pending_jobs: &[fulgorart_db::TagJobWithKey],
-) -> Result<google_cloud_run_v2::model::Execution> {
-    use google_cloud_lro::Poller;
-    use google_cloud_run_v2::{client::Jobs, model::run_job_request::Overrides};
-
-    // Initialize the Cloud Run Admin API client
-    let client = Jobs::builder().build().await?;
-
-    let name = format!(
-        "projects/{}/locations/{}/jobs/{}",
-        cloud_run.project_id, cloud_run.location, cloud_run.job_name
-    );
-
-    let co = google_cloud_run_v2::model::run_job_request::overrides::ContainerOverride::new()
-        .set_args(
-            pending_jobs
-                .iter()
-                .map(|job| format!("r2://{}", job.s3_key)),
+            self.project_id,
+            self.location,
+            self.job_name,
+            task_id.as_ref()
         );
 
-    // let co = overrides::ContainerOverride::new().set_args(Vec::<String>::new());
+        let mut entries = Vec::new();
+        let mut page_token = String::new();
 
-    let or = Overrides::new()
-        .set_container_overrides([co])
-        .set_task_count(1);
+        loop {
+            let response = client
+                .list_log_entries()
+                .set_resource_names(vec![format!("projects/{}", self.project_id)])
+                .set_filter(filter_query.clone())
+                .set_order_by("timestamp asc")
+                .set_page_token(page_token)
+                .send()
+                .await?;
 
-    Ok(client
-        .run_job()
-        .set_name(name)
-        .set_overrides(or)
-        .poller()
-        .until_done()
-        .await?)
+            entries.extend(response.entries.iter().cloned());
+            println!("entries: {} -> {}", response.entries.len(), entries.len());
+
+            if response.next_page_token.is_empty() {
+                return Ok(entries);
+            }
+
+            page_token = response.next_page_token;
+        }
+    }
+
+    async fn trigger(
+        &self,
+        pending_jobs: &[fulgorart_db::TagJobWithKey],
+    ) -> Result<google_cloud_run_v2::model::Execution> {
+        use google_cloud_lro::Poller;
+        use google_cloud_run_v2::{client::Jobs, model::run_job_request::Overrides};
+
+        // Initialize the Cloud Run Admin API client
+        let client = Jobs::builder().build().await?;
+
+        let name = format!(
+            "projects/{}/locations/{}/jobs/{}",
+            self.project_id, self.location, self.job_name
+        );
+
+        let co = google_cloud_run_v2::model::run_job_request::overrides::ContainerOverride::new()
+            .set_args(
+                pending_jobs
+                    .iter()
+                    .map(|job| format!("r2://{}", job.s3_key)),
+            );
+
+        // let co = overrides::ContainerOverride::new().set_args(Vec::<String>::new());
+
+        let or = Overrides::new()
+            .set_container_overrides([co])
+            .set_task_count(1);
+
+        Ok(client
+            .run_job()
+            .set_name(name)
+            .set_overrides(or)
+            .poller()
+            .until_done()
+            .await?)
+    }
 }
 
 pub async fn run(db_connection: Db, cloud_run: &CloudRunJob) -> Result<()> {
@@ -114,7 +124,7 @@ pub async fn run(db_connection: Db, cloud_run: &CloudRunJob) -> Result<()> {
         s3_key: "119053188_p0.jpg".to_string(),
     }];
 
-    let execution = trigger_job(cloud_run, &pending_jobs).await?;
+    let execution = cloud_run.trigger(&pending_jobs).await?;
     let task_id = execution
         .name
         .split("/")
@@ -122,7 +132,7 @@ pub async fn run(db_connection: Db, cloud_run: &CloudRunJob) -> Result<()> {
         .ok_or(anyhow::anyhow!("Invalid task name"))?;
     println!("task id: {task_id}");
 
-    let entries = retrieve_log(cloud_run, task_id).await?;
+    let entries = cloud_run.retrieve_log(task_id).await?;
     // let entries = self.retrieve_log("fulgorart-tagger-78tkn").await?;
 
     let find_ids = |key: &str| {

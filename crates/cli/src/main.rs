@@ -70,11 +70,7 @@ async fn main() -> Result<()> {
         Commands::Ingestor(args) => ingestor::run(args)?,
         Commands::RemoteTagger => {
             let db = connect_db().await?;
-            let job = remote_tagger_tool::CloudRunJob {
-                project_id: "".to_string(),
-                location: "".to_string(),
-                job_name: String::new(),
-            };
+            let job = remote_tagger_tool::CloudRunJob::from_env()?;
             remote_tagger_tool::run(db, &job).await?
         }
     }
