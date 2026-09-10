@@ -5,6 +5,7 @@ members = [
     "crates/db",
     "crates/storage",
     "crates/tagger",
+    "crates/tagger_s3",
     "crates/ingestor",
     "crates/web",
 ]

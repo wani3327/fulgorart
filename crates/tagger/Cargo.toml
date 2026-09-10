@@ -7,7 +7,6 @@ edition = "2021"
 gcp = [ "dep:tracing-stackdriver" ]
 
 [dependencies]
-fulgorart-storage = { path = "../storage" }
 tokio = { workspace = true }
 dotenvy = { workspace = true }
 serde = { workspace = true }
