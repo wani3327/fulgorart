@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - './crates/tagger/**'
+      - './crates/tagger_s3/**'
       - './crates/storage/**'
   workflow_dispatch:
 
@@ -35,9 +36,9 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .  # Change to your specific directory if the Dockerfile is in there
-          file: ./crates/tagger/Dockerfile  # Path to your Dockerfile
+          file: ./crates/tagger_s3/Dockerfile  # Path to your Dockerfile
           push: true
           tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/fulgorart-tagger:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/fulgorart-tagger-s3:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
