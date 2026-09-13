@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use aws_sdk_s3::primitives::ByteStream;
+use chrono::Utc;
 use tracing::instrument;
 use std::time::Duration;
 
@@ -111,10 +112,9 @@ impl R2Client {
     }
 
     #[instrument(skip(self))]
-    pub async fn presigned_object_url(&self, key: &str, ttl_secs: u64) -> Result<String> {
-        let expires_in = Duration::from_secs(ttl_secs);
+    pub async fn presigned_object_url(&self, key: &str, ttl: Duration) -> Result<String> {
         let presigning_config =
-            aws_sdk_s3::presigning::PresigningConfig::expires_in(expires_in)?;
+            aws_sdk_s3::presigning::PresigningConfig::expires_in(ttl)?;
         let presigned_request = self
             .client
             .get_object()
@@ -127,16 +127,11 @@ impl R2Client {
         Ok(presigned_request.uri().to_string())
     }
 
-    pub fn canonical_key(source_type: &str, sha256: &str, ext: &str) -> String {
-        let now = chrono::Utc::now();
+    pub fn canonical_key(category: &str, filename: &str, extension: &str) -> String {
+        let now = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
         format!(
-            "images/{}/{}/{}/{}/{}.{}",
-            source_type,
-            now.format("%Y"),
-            now.format("%m"),
-            now.format("%d"),
-            sha256,
-            ext
+            "{}/{}.{}.{}",
+            category, filename, now, extension
         )
     }
 }

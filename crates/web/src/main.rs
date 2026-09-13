@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use axum::{
     extract::{Path, Query, State},
     http::{Request, StatusCode},
@@ -95,7 +97,7 @@ const IMAGE_URL_TTL_SECS: u64 = 60 * 60;
 async fn resolve_image_url(state: &AppState, s3_key: &str) -> String {
     match state
         .storage
-        .presigned_object_url(s3_key, IMAGE_URL_TTL_SECS)
+        .presigned_object_url(s3_key, Duration::from_secs(IMAGE_URL_TTL_SECS))
         .await
     {
         Ok(url) => url,

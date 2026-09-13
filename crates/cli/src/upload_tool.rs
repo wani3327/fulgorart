@@ -36,6 +36,7 @@ fn content_type_for_ext(ext: &str) -> &'static str {
     }
 }
 
+/// TODO: gallery-dl 툴이 이 run 메소드에 의존할 수 있을 것 같음. 복잡한 sqlite 체크 및 업로드 로직을 일원화해야 함.
 pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
     let path = std::path::Path::new(&args.file);
     let data = tokio::fs::read(path)
@@ -46,7 +47,7 @@ pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
     let ext = path
         .extension()
         .and_then(|value| value.to_str())
-        .unwrap_or("jpg")
+        .unwrap_or_default()
         .to_lowercase();
     let content_type = content_type_for_ext(&ext);
 
@@ -62,7 +63,7 @@ pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
         Err(_) => (None, None),
     };
 
-    let key = ""; //R2Client::canonical_key(&args.source_type, &sha256, &ext);
+    let key = R2Client::canonical_key(&args.source_type, &path.file_name().unwrap_or_default().to_string_lossy(), &ext);
     let r2_url = r2.object_url(&key);
     r2.upload(&key, bytes, content_type)
         .await
