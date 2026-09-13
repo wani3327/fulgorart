@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use aws_sdk_s3::primitives::ByteStream;
 use tracing::instrument;
+use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub struct R2Config {
@@ -107,6 +108,23 @@ impl R2Client {
             self.bucket,
             key
         )
+    }
+
+    #[instrument(skip(self))]
+    pub async fn presigned_object_url(&self, key: &str, ttl_secs: u64) -> Result<String> {
+        let expires_in = Duration::from_secs(ttl_secs);
+        let presigning_config =
+            aws_sdk_s3::presigning::PresigningConfig::expires_in(expires_in)?;
+        let presigned_request = self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .presigned(presigning_config)
+            .await
+            .with_context(|| format!("Failed to presign object URL for key {key}"))?;
+
+        Ok(presigned_request.uri().to_string())
     }
 
     pub fn canonical_key(source_type: &str, sha256: &str, ext: &str) -> String {
