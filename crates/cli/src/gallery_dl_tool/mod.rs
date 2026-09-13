@@ -5,7 +5,6 @@ use std::io::{self, Read as _};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use chrono::Utc;
 use clap::Args as ClapArgs;
 use fulgorart_db::Db;
 use fulgorart_storage::R2Client;
@@ -108,11 +107,7 @@ pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
         // find metadata
         let (sha256, width, height) = image_metadata(&data);
         let content_type = content_type_for_ext(&item_info.extension);
-        let now = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
-        let s3_key = format!(
-            "{}/{}.{}.{}",
-            post_info.category, item_info.filename, now, item_info.extension
-        );
+        let s3_key = R2Client::canonical_key(&post_info.category, &item_info.filename, &item_info.extension);
         let file_size = data.len() as i64;
 
         // check duplication to DB

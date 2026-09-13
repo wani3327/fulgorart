@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use axum::{
     extract::{Path, Query, State},
     http::{Request, StatusCode},
@@ -90,11 +92,27 @@ struct ImageWithTags {
     tags: Vec<TagRow>,
 }
 
+const IMAGE_URL_TTL_SECS: u64 = 60 * 60;
+
+async fn resolve_image_url(state: &AppState, s3_key: &str) -> String {
+    match state
+        .storage
+        .presigned_object_url(s3_key, Duration::from_secs(IMAGE_URL_TTL_SECS))
+        .await
+    {
+        Ok(url) => url,
+        Err(error) => {
+            tracing::warn!(%s3_key, ?error, "Failed to create presigned URL, falling back to object URL");
+            state.storage.object_url(s3_key)
+        }
+    }
+}
+
 async fn get_index(State(state): State<AppState>) -> Html<String> {
     let images = state.db.list_image_assets(1, 50).await.unwrap_or_default();
     let mut cards = String::new();
     for img in &images {
-        let url = state.storage.object_url(&img.s3_key);
+        let url = resolve_image_url(&state, &img.s3_key).await;
         cards.push_str(&format!(
             r#"<div class="card">
   <a href="/image/{id}"><img src="{url}" loading="lazy" alt="image {id}"/></a>
@@ -141,7 +159,7 @@ async fn get_image_page(
         .ok_or(StatusCode::NOT_FOUND)?;
 
     let tags = state.db.get_image_tags(id).await.unwrap_or_default();
-    let url = state.storage.object_url(&asset.s3_key);
+    let url = resolve_image_url(&state, &asset.s3_key).await;
     let tag_list = tags
         .iter()
         .map(|tag| {
