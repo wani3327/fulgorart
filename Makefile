@@ -44,23 +44,8 @@ run-cli:
 run-tagger:
 	cargo run --bin fulgorart-tagger -- $(or $(ARGS),$(TARGET_ARGS))
 
-run-ingestor:
-	cargo run --bin fulgorart-ingestor
-
-run-upload-tool:
-	cargo run --bin fulgorart-cli -- upload-tool $(or $(ARGS),$(TARGET_ARGS))
-
-run-tagger-tool:
-	cargo run --bin fulgorart-cli -- tagger-tool $(or $(ARGS),$(TARGET_ARGS))
-
-run-gallery-dl:
-	cargo run --bin fulgorart-cli -- gallery-dl $(or $(ARGS),$(TARGET_ARGS))
-
-run-ingestor-tool:
-	cargo run --bin fulgorart-cli -- ingestor $(or $(ARGS),$(TARGET_ARGS))
-
-run-remote-tagger:
-	cargo run --bin fulgorart-cli -- remote-tagger $(or $(ARGS),$(TARGET_ARGS))
+# run-ingestor:
+# 	cargo run --bin fulgorart-ingestor
 
 docker-build-tagger:
 	docker build -f crates/tagger/Dockerfile -t $(TAGGER_IMAGE) .
