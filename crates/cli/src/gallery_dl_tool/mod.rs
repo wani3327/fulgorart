@@ -26,6 +26,7 @@ pub struct Args {
 }
 
 pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
+    // process inputs
     let image_paths = index_image_paths(&args.image_dir).await.with_context(|| {
         format!(
             "Failed to index image directory '{}'",
@@ -42,8 +43,9 @@ pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
             input
         }
     };
-    let entries: PixivGalleryDlJson3 =
-        serde_json::from_str(&json).with_context(|| format!("Failed to parse JSON"))?;
+    let entries = interest_iter::<PixivGalleryDlJson3>(
+        serde_json::from_str(&json).with_context(|| format!("Failed to parse JSON"))?,
+    );
 
     let mut imported_posts = 0usize;
     let mut inserted_assets = 0usize;
@@ -51,10 +53,7 @@ pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
     let upload_slots = std::sync::Arc::new(Semaphore::new(MAX_CONCURRENT_UPLOADS));
     let mut upload_tasks = JoinSet::new();
 
-    // for entry in entries {
-    for (_i, entry) in entries.into_iter().enumerate() {
-        let post_info = entry.clone().post();
-        let item_info = entry.item();
+    for (post_info, item_info) in entries {
         let source_post_id = post_info.id.to_string();
 
         // find post from DB
@@ -107,7 +106,11 @@ pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
         // find metadata
         let (sha256, width, height) = image_metadata(&data);
         let content_type = content_type_for_ext(&item_info.extension);
-        let s3_key = R2Client::canonical_key(&post_info.source_type, &item_info.filename, &item_info.extension);
+        let s3_key = R2Client::canonical_key(
+            &post_info.source_type,
+            &item_info.filename,
+            &item_info.extension,
+        );
         let file_size = data.len() as i64;
 
         // check duplication to DB
@@ -222,6 +225,13 @@ async fn index_image_paths(image_dir: &Path) -> Result<HashMap<String, PathBuf>>
     }
 
     Ok(result)
+}
+
+fn interest_iter<T>(x: Vec<T>) -> impl Iterator<Item = (PostInterested, ItemInterested)>
+where
+    T: Clone + PostInterest + ItemInterest,
+{
+    x.into_iter().map(|y| (y.clone().post(), y.item()))
 }
 
 fn image_metadata(data: &[u8]) -> (String, Option<i64>, Option<i64>) {

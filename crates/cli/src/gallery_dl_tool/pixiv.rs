@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{ItemInterest, ItemInterested, PostInterest, PostInterested, UserInterested};
 
-pub type PixivGalleryDlJson3 = Vec<(i64, String, PixivItem)>;
-pub type PixivGalleryDlJson2 = Vec<(i64, PixivPost)>;
+pub type PixivGalleryDlJson3 = (i64, String, PixivItem);
+pub type PixivGalleryDlJson2 = (i64, PixivPost);
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct PixivItem {
@@ -186,7 +186,7 @@ impl PostInterest for (i64, String, PixivItem) {
     }
 }
 
-impl ItemInterest for (i64, String, PixivItem) {
+impl ItemInterest for PixivGalleryDlJson3 {
     fn item(self) -> ItemInterested {
         let filename = |s: &str| -> Option<String> {
             if self.2.hash.len() == 0 {

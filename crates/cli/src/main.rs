@@ -7,7 +7,6 @@ mod gallery_dl_tool;
 mod ingestor;
 mod remote_tagger_tool;
 mod tagger_tool;
-mod upload_tool;
 
 #[derive(Parser)]
 #[command(name = "fulgorart-cli", about = "FulgorArt command-line tool")]
@@ -19,7 +18,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Register a local image into DB + storage and queue tagging
-    UploadTool(upload_tool::Args),
+    // UploadTool(upload_tool::Args),
     /// Process uploaded tag jobs with the local WD14 tagger
     TaggerTool(tagger_tool::Args),
     /// Import gallery-dl Pixiv JSON and downloaded files into the DB
@@ -52,11 +51,11 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     match cli.command {
-        Commands::UploadTool(args) => {
-            let db = connect_db().await?;
-            let r2 = connect_r2().await?;
-            upload_tool::run(args, &db, &r2).await?;
-        }
+        // Commands::UploadTool(args) => {
+        //     let db = connect_db().await?;
+        //     let r2 = connect_r2().await?;
+        //     upload_tool::run(args, &db, &r2).await?;
+        // }
         Commands::TaggerTool(args) => {
             let db = connect_db().await?;
             let r2 = connect_r2().await?;
