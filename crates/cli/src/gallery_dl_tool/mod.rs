@@ -115,8 +115,7 @@ pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
                     source_url: Some(&item_info.url),
                 },
             )
-            .await?
-            ;
+            .await?;
         if claimed.inserted_post {
             imported_posts += 1;
         }
