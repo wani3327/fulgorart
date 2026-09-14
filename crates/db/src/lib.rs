@@ -219,90 +219,6 @@ impl Db {
         .map_err(Into::into)
     }
 
-    pub async fn insert_post(
-        &self,
-        source_type: &str,
-        source_post_id: &str,
-        source_post_url: &str,
-        liked_at: Option<&str>,
-        author_source_id: Option<&str>,
-        author_name: Option<&str>,
-        author_url: Option<&str>,
-        raw_json: Option<&str>,
-    ) -> Result<PostRow> {
-        self.insert_post_with_details(
-            source_type,
-            source_post_id,
-            source_post_url,
-            liked_at,
-            author_source_id,
-            author_name,
-            author_url,
-            None,
-            None,
-            None,
-            raw_json,
-        )
-        .await
-    }
-
-    #[deprecated]
-    pub async fn insert_post_with_details(
-        &self,
-        source_type: &str,
-        source_post_id: &str,
-        source_post_url: &str,
-        uploaded_at: Option<&str>,
-        author_source_id: Option<&str>,
-        author_name: Option<&str>,
-        author_url: Option<&str>,
-        author_profile_url: Option<&str>,
-        title: Option<&str>,
-        caption: Option<&str>,
-        raw_json: Option<&str>,
-    ) -> Result<PostRow> {
-        let author_id = match author_source_id {
-            Some(source_author_id) => Some(
-                self.upsert_author_with_profile(
-                    source_type,
-                    source_author_id,
-                    author_name,
-                    author_url,
-                    author_profile_url,
-                )
-                .await?
-                .id,
-            ),
-            None => None,
-        };
-
-        sqlx::query(
-            "INSERT INTO post (source_type, source_post_id, source_post_url, author_id, title, caption, uploaded_at, raw_json)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(source_type, source_post_id) DO UPDATE SET
-               source_post_url = excluded.source_post_url,
-               author_id = excluded.author_id,
-               title = excluded.title,
-               caption = excluded.caption,
-               uploaded_at = excluded.uploaded_at,
-               raw_json = excluded.raw_json"
-        )
-        .bind(source_type)
-        .bind(source_post_id)
-        .bind(source_post_url)
-        .bind(author_id)
-        .bind(title)
-        .bind(caption)
-        .bind(uploaded_at)
-        .bind(raw_json)
-        .execute(&self.pool)
-        .await?;
-
-        self.get_post_by_source(source_type, source_post_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Post not found after insert"))
-    }
-
     pub async fn upsert_author_with_profile(
         &self,
         source_type: &str,
@@ -336,6 +252,64 @@ impl Db {
         .fetch_one(&self.pool)
         .await
         .map_err(Into::into)
+    }
+
+    pub async fn insert_post(
+        &self,
+        post: &GalleryImportPostArgs<'_>,
+        author: Option<&GalleryImportAuthorArgs<'_>>,
+        // source_type: &str,
+        // source_post_id: &str,
+        // source_post_url: &str,
+        // uploaded_at: Option<&str>,
+        // author_source_id: Option<&str>,
+        // author_name: Option<&str>,
+        // author_url: Option<&str>,
+        // author_profile_url: Option<&str>,
+        // title: Option<&str>,
+        // caption: Option<&str>,
+        // raw_json: Option<&str>,
+    ) -> Result<PostRow> {
+        let author_id = match author {
+            Some(author) => Some(
+                self.upsert_author_with_profile(
+                    post.source_type,
+                    author.source_author_id,
+                    author.name,
+                    author.url,
+                    author.profile_url,
+                )
+                .await?
+                .id,
+            ),
+            None => None,
+        };
+
+        sqlx::query(
+            "INSERT INTO post (source_type, source_post_id, source_post_url, author_id, title, caption, uploaded_at, raw_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(source_type, source_post_id) DO UPDATE SET
+               source_post_url = excluded.source_post_url,
+               author_id = excluded.author_id,
+               title = excluded.title,
+               caption = excluded.caption,
+               uploaded_at = excluded.uploaded_at,
+               raw_json = excluded.raw_json"
+        )
+        .bind(post.source_type)
+        .bind(post.source_post_id)
+        .bind(post.source_post_url)
+        .bind(author_id)
+        .bind(post.title)
+        .bind(post.caption)
+        .bind(post.uploaded_at)
+        .bind(post.raw_json)
+        .execute(&self.pool)
+        .await?;
+
+        self.get_post_by_source(post.source_type, post.source_post_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Post not found after insert"))
     }
 
     pub async fn get_post_by_id(&self, id: i64) -> Result<Option<PostRow>> {
@@ -374,18 +348,9 @@ impl Db {
             Some(existing) => (existing, false),
             None => {
                 let inserted = self
-                    .insert_post_with_details(
-                        post.source_type,
-                        post.source_post_id,
-                        post.source_post_url,
-                        post.uploaded_at,
-                        author.map(|value| value.source_author_id),
-                        author.and_then(|value| value.name),
-                        author.and_then(|value| value.url),
-                        author.and_then(|value| value.profile_url),
-                        post.title,
-                        post.caption,
-                        post.raw_json,
+                    .insert_post(
+                        post,
+                        author,
                     )
                     .await?;
                 (inserted, true)
