@@ -90,7 +90,7 @@ impl R2Client {
     }
 
     #[instrument(skip(self, data))]
-    pub async fn upload(&self, key: &str, data: bytes::Bytes, content_type: &str) -> Result<()> {
+    pub async fn upload(&self, key: &str, data: Vec<u8>, content_type: &str) -> Result<()> {
         self.client
             .put_object()
             .bucket(&self.bucket)

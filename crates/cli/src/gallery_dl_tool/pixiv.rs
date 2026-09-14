@@ -173,7 +173,7 @@ impl PostInterest for (i64, String, PixivItem) {
         };
 
         PostInterested {
-            category: self.2.pixiv2.category,
+            source_type: self.2.pixiv2.category,
             date: self.2.pixiv2.date,
             user,
             id: self.2.pixiv2.id,
@@ -181,6 +181,7 @@ impl PostInterest for (i64, String, PixivItem) {
             title: self.2.pixiv2.title,
             compressed: serde_json::to_vec(&compressed)
                 .expect("failed to serialize compressed pixiv fields"),
+            url: format!("https://www.pixiv.net/artworks/{}", self.2.pixiv2.id),
         }
     }
 }

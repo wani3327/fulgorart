@@ -208,6 +208,7 @@ impl Db {
         .await
     }
 
+    #[deprecated]
     pub async fn insert_post_with_details(
         &self,
         source_type: &str,

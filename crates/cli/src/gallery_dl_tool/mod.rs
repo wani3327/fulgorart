@@ -59,7 +59,7 @@ pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
 
         // find post from DB
         let post_id = match db
-            .get_post_by_source(&post_info.category, &source_post_id)
+            .get_post_by_source(&post_info.source_type, &source_post_id)
             .await?
         {
             Some(post) => post.id,
@@ -69,9 +69,9 @@ pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
                     .context("Compressed Pixiv metadata was not valid UTF-8 JSON")?;
                 let post = db
                     .insert_post_with_details(
-                        &post_info.category,
+                        &post_info.source_type,
                         &source_post_id,
-                        &format!("https://www.pixiv.net/artworks/{}", post_info.id),
+                        &post_info.url,
                         Some(&post_info.date),
                         Some(&post_info.user.id.to_string()),
                         Some(&post_info.user.name),
@@ -107,7 +107,7 @@ pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
         // find metadata
         let (sha256, width, height) = image_metadata(&data);
         let content_type = content_type_for_ext(&item_info.extension);
-        let s3_key = R2Client::canonical_key(&post_info.category, &item_info.filename, &item_info.extension);
+        let s3_key = R2Client::canonical_key(&post_info.source_type, &item_info.filename, &item_info.extension);
         let file_size = data.len() as i64;
 
         // check duplication to DB
@@ -158,7 +158,7 @@ pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
         upload_tasks.spawn(async move {
             let _permit = permit;
             let upload_result = r2
-                .upload(&s3_key, bytes::Bytes::from(data), content_type)
+                .upload(&s3_key, data, content_type)
                 .await
                 .with_context(|| {
                     format!(
@@ -250,11 +250,12 @@ fn content_type_for_ext(ext: &str) -> &'static str {
 }
 
 pub struct PostInterested {
-    category: String,
-    date: String,
-    user: UserInterested,
     id: i64,
+    url: String,
+    source_type: String,
+    user: UserInterested,
     caption: String,
+    date: String,
     title: String,
     compressed: Vec<u8>,
 }
