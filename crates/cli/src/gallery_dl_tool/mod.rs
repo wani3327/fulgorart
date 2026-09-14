@@ -81,6 +81,7 @@ pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
             &item_info.filename,
             &item_info.extension,
         );
+        let thumbnail_s3_key = R2Client::thumbnail_key(&s3_key);
         let file_size = data.len() as i64;
         let raw_json = String::from_utf8(post_info.compressed.clone())
             .context("Compressed Pixiv metadata was not valid UTF-8 JSON")?;
@@ -107,6 +108,7 @@ pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
                 &GalleryImportImageArgs {
                     sha256: &sha256,
                     s3_key: &s3_key,
+                    thumbnail_s3_key: Some(&thumbnail_s3_key),
                     filename: Some(&item_info.filename),
                     width,
                     height,
@@ -154,7 +156,7 @@ pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
         upload_tasks.spawn(async move {
             let _permit = permit;
             let upload_result = r2
-                .upload(&s3_key, data, content_type)
+                .upload_with_thumbnail(&s3_key, data, content_type)
                 .await
                 .with_context(|| {
                     format!(
@@ -165,7 +167,7 @@ pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
                 });
 
             match upload_result {
-                Ok(()) => {
+                Ok(_) => {
                     db.update_tag_job_status(job_id, "uploaded", None).await?;
                     println!(
                         "uploaded filename={} image_id={} key={}",

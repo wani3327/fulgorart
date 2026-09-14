@@ -112,7 +112,8 @@ async fn get_index(State(state): State<AppState>) -> Html<String> {
     let images = state.db.list_image_assets(1, 50).await.unwrap_or_default();
     let mut cards = String::new();
     for img in &images {
-        let url = resolve_image_url(&state, &img.s3_key).await;
+        let dashboard_key = img.thumbnail_s3_key.as_deref().unwrap_or(&img.s3_key);
+        let url = resolve_image_url(&state, dashboard_key).await;
         cards.push_str(&format!(
             r#"<div class="card">
   <a href="/image/{id}"><img src="{url}" loading="lazy" alt="image {id}"/></a>

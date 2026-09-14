@@ -63,6 +63,7 @@ pub struct ImageAssetRow {
     pub post_id: Option<i64>,
     pub sha256: String,
     pub s3_key: String,
+    pub thumbnail_s3_key: Option<String>,
     pub filename: Option<String>,
     pub width: Option<i64>,
     pub height: Option<i64>,
@@ -157,6 +158,7 @@ pub struct GalleryImportAuthorArgs<'a> {
 pub struct GalleryImportImageArgs<'a> {
     pub sha256: &'a str,
     pub s3_key: &'a str,
+    pub thumbnail_s3_key: Option<&'a str>,
     pub filename: Option<&'a str>,
     pub width: Option<i64>,
     pub height: Option<i64>,
@@ -347,12 +349,7 @@ impl Db {
         {
             Some(existing) => (existing, false),
             None => {
-                let inserted = self
-                    .insert_post(
-                        post,
-                        author,
-                    )
-                    .await?;
+                let inserted = self.insert_post(post, author).await?;
                 (inserted, true)
             }
         };
@@ -362,6 +359,7 @@ impl Db {
                 Some(post_row.id),
                 image.sha256,
                 image.s3_key,
+                image.thumbnail_s3_key,
                 image.filename,
                 image.width,
                 image.height,
@@ -385,6 +383,7 @@ impl Db {
         post_id: Option<i64>,
         sha256: &str,
         s3_key: &str,
+        thumbnail_s3_key: Option<&str>,
         width: Option<i64>,
         height: Option<i64>,
         file_size: Option<i64>,
@@ -395,6 +394,7 @@ impl Db {
             post_id,
             sha256,
             s3_key,
+            thumbnail_s3_key,
             None,
             width,
             height,
@@ -410,6 +410,7 @@ impl Db {
         post_id: Option<i64>,
         sha256: &str,
         s3_key: &str,
+        thumbnail_s3_key: Option<&str>,
         filename: Option<&str>,
         width: Option<i64>,
         height: Option<i64>,
@@ -418,10 +419,11 @@ impl Db {
         source_url: Option<&str>,
     ) -> Result<ImageAssetRow> {
         sqlx::query(
-            "INSERT INTO image_asset (post_id, sha256, s3_key, filename, width, height, file_size, content_type, source_url)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "INSERT INTO image_asset (post_id, sha256, s3_key, thumbnail_s3_key, filename, width, height, file_size, content_type, source_url)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(sha256) DO UPDATE SET
                 s3_key = excluded.s3_key,
+                thumbnail_s3_key = COALESCE(excluded.thumbnail_s3_key, image_asset.thumbnail_s3_key),
                 post_id = COALESCE(image_asset.post_id, excluded.post_id),
                 filename = COALESCE(excluded.filename, image_asset.filename),
                 source_url = COALESCE(excluded.source_url, image_asset.source_url),
@@ -430,6 +432,7 @@ impl Db {
         .bind(post_id)
         .bind(sha256)
         .bind(s3_key)
+        .bind(thumbnail_s3_key)
         .bind(filename)
         .bind(width)
         .bind(height)
@@ -467,6 +470,7 @@ impl Db {
         post_id: Option<i64>,
         sha256: &str,
         s3_key: &str,
+        thumbnail_s3_key: Option<&str>,
         filename: Option<&str>,
         width: Option<i64>,
         height: Option<i64>,
@@ -476,12 +480,13 @@ impl Db {
     ) -> Result<Option<ClaimedImageUpload>> {
         let mut tx = self.pool.begin().await?;
         let result = sqlx::query(
-            "INSERT OR IGNORE INTO image_asset (post_id, sha256, s3_key, filename, width, height, file_size, content_type, source_url)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            "INSERT OR IGNORE INTO image_asset (post_id, sha256, s3_key, thumbnail_s3_key, filename, width, height, file_size, content_type, source_url)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(post_id)
         .bind(sha256)
         .bind(s3_key)
+        .bind(thumbnail_s3_key)
         .bind(filename)
         .bind(width)
         .bind(height)
