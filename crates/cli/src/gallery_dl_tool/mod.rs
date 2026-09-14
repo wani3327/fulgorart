@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::Args as ClapArgs;
-use fulgorart_db::Db;
+use fulgorart_db::{Db, GalleryImportAuthorArgs, GalleryImportImageArgs, GalleryImportPostArgs};
 use fulgorart_storage::R2Client;
 use image::GenericImageView;
 use sha2::Digest;
@@ -56,36 +56,6 @@ pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
     for (post_info, item_info) in entries {
         let source_post_id = post_info.id.to_string();
 
-        // find post from DB
-        let post_id = match db
-            .get_post_by_source(&post_info.source_type, &source_post_id)
-            .await?
-        {
-            Some(post) => post.id,
-            None => {
-                // if not found, insert post
-                let raw_json = String::from_utf8(post_info.compressed.clone())
-                    .context("Compressed Pixiv metadata was not valid UTF-8 JSON")?;
-                let post = db
-                    .insert_post_with_details(
-                        &post_info.source_type,
-                        &source_post_id,
-                        &post_info.url,
-                        Some(&post_info.date),
-                        Some(&post_info.user.id.to_string()),
-                        Some(&post_info.user.name),
-                        Some(&post_info.user.url),
-                        Some(&post_info.user.profile_url),
-                        Some(&post_info.title),
-                        Some(&post_info.caption),
-                        Some(&raw_json),
-                    )
-                    .await?;
-                imported_posts += 1;
-                post.id
-            }
-        };
-
         // read image
         let Some(image_path) =
             image_paths.get(&format!("{}.{}", item_info.filename, item_info.extension))
@@ -112,22 +82,45 @@ pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
             &item_info.extension,
         );
         let file_size = data.len() as i64;
+        let raw_json = String::from_utf8(post_info.compressed.clone())
+            .context("Compressed Pixiv metadata was not valid UTF-8 JSON")?;
+        let author_source_id = post_info.user.id.to_string();
 
         // check duplication to DB
-        let Some(claimed_upload) = db
-            .claim_image_asset_upload_with_filename(
-                Some(post_id),
-                &sha256,
-                &s3_key,
-                Some(&item_info.filename),
-                width,
-                height,
-                Some(file_size),
-                content_type,
-                Some(&item_info.url),
+        let claimed = db
+            .claim_gallery_image_upload(
+                &GalleryImportPostArgs {
+                    source_type: &post_info.source_type,
+                    source_post_id: &source_post_id,
+                    source_post_url: &post_info.url,
+                    uploaded_at: Some(&post_info.date),
+                    title: Some(&post_info.title),
+                    caption: Some(&post_info.caption),
+                    raw_json: Some(&raw_json),
+                },
+                Some(&GalleryImportAuthorArgs {
+                    source_author_id: &author_source_id,
+                    name: Some(&post_info.user.name),
+                    url: Some(&post_info.user.url),
+                    profile_url: Some(&post_info.user.profile_url),
+                }),
+                &GalleryImportImageArgs {
+                    sha256: &sha256,
+                    s3_key: &s3_key,
+                    filename: Some(&item_info.filename),
+                    width,
+                    height,
+                    file_size: Some(file_size),
+                    content_type,
+                    source_url: Some(&item_info.url),
+                },
             )
-            .await?
-        else {
+            .await?;
+        if claimed.inserted_post {
+            imported_posts += 1;
+        }
+
+        let Some(claimed_upload) = claimed.claimed_upload else {
             // duplicated. skip uploading.
             let existing_asset = db.get_image_asset_by_sha256(&sha256).await?;
             match existing_asset {

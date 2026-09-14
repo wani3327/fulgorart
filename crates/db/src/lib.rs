@@ -134,6 +134,44 @@ pub struct ClaimedImageUpload {
     pub job: TagJobRow,
 }
 
+#[derive(Debug, Clone)]
+pub struct GalleryImportPostArgs<'a> {
+    pub source_type: &'a str,
+    pub source_post_id: &'a str,
+    pub source_post_url: &'a str,
+    pub uploaded_at: Option<&'a str>,
+    pub title: Option<&'a str>,
+    pub caption: Option<&'a str>,
+    pub raw_json: Option<&'a str>,
+}
+
+#[derive(Debug, Clone)]
+pub struct GalleryImportAuthorArgs<'a> {
+    pub source_author_id: &'a str,
+    pub name: Option<&'a str>,
+    pub url: Option<&'a str>,
+    pub profile_url: Option<&'a str>,
+}
+
+#[derive(Debug, Clone)]
+pub struct GalleryImportImageArgs<'a> {
+    pub sha256: &'a str,
+    pub s3_key: &'a str,
+    pub filename: Option<&'a str>,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    pub file_size: Option<i64>,
+    pub content_type: &'a str,
+    pub source_url: Option<&'a str>,
+}
+
+#[derive(Debug, Clone)]
+pub struct GalleryImportClaimResult {
+    pub post: PostRow,
+    pub inserted_post: bool,
+    pub claimed_upload: Option<ClaimedImageUpload>,
+}
+
 impl Db {
     #[instrument(skip(path))]
     pub async fn connect(path: &Path) -> Result<Self> {
@@ -321,6 +359,58 @@ impl Db {
         .fetch_optional(&self.pool)
         .await?;
         Ok(row)
+    }
+
+    pub async fn claim_gallery_image_upload(
+        &self,
+        post: &GalleryImportPostArgs<'_>,
+        author: Option<&GalleryImportAuthorArgs<'_>>,
+        image: &GalleryImportImageArgs<'_>,
+    ) -> Result<GalleryImportClaimResult> {
+        let (post_row, inserted_post) = match self
+            .get_post_by_source(post.source_type, post.source_post_id)
+            .await?
+        {
+            Some(existing) => (existing, false),
+            None => {
+                let inserted = self
+                    .insert_post_with_details(
+                        post.source_type,
+                        post.source_post_id,
+                        post.source_post_url,
+                        post.uploaded_at,
+                        author.map(|value| value.source_author_id),
+                        author.and_then(|value| value.name),
+                        author.and_then(|value| value.url),
+                        author.and_then(|value| value.profile_url),
+                        post.title,
+                        post.caption,
+                        post.raw_json,
+                    )
+                    .await?;
+                (inserted, true)
+            }
+        };
+
+        let claimed_upload = self
+            .claim_image_asset_upload_with_filename(
+                Some(post_row.id),
+                image.sha256,
+                image.s3_key,
+                image.filename,
+                image.width,
+                image.height,
+                image.file_size,
+                image.content_type,
+                image.source_url,
+            )
+            .await?;
+
+        Ok(GalleryImportClaimResult {
+            post: post_row,
+            inserted_post,
+            claimed_upload,
+        })
     }
 
     // ---- ImageAsset ----
