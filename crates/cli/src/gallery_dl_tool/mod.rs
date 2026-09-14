@@ -167,7 +167,7 @@ pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
                 });
 
             match upload_result {
-                Ok(()) => {
+                Ok(_) => {
                     db.update_tag_job_status(job_id, "uploaded", None).await?;
                     println!(
                         "uploaded filename={} image_id={} key={}",

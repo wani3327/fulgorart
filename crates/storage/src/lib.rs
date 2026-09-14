@@ -116,7 +116,8 @@ impl R2Client {
         let thumbnail_data = Self::build_thumbnail_webp(&data)?;
 
         self.upload(key, data, content_type).await?;
-        self.upload(&thumbnail_key, thumbnail_data, "image/webp").await?;
+        self.upload(&thumbnail_key, thumbnail_data, "image/webp")
+            .await?;
 
         Ok(thumbnail_key)
     }
@@ -155,8 +156,10 @@ impl R2Client {
     }
 
     fn build_thumbnail_webp(data: &[u8]) -> Result<Vec<u8>> {
-        let image = image::load_from_memory(data).context("Failed to decode image for thumbnail")?;
-        let thumbnail = image.thumbnail(Self::THUMBNAIL_MAX_DIMENSION, Self::THUMBNAIL_MAX_DIMENSION);
+        let image =
+            image::load_from_memory(data).context("Failed to decode image for thumbnail")?;
+        let thumbnail =
+            image.thumbnail(Self::THUMBNAIL_MAX_DIMENSION, Self::THUMBNAIL_MAX_DIMENSION);
         let mut out = std::io::Cursor::new(Vec::new());
         thumbnail
             .write_to(&mut out, ImageFormat::WebP)

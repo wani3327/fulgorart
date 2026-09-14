@@ -349,12 +349,7 @@ impl Db {
         {
             Some(existing) => (existing, false),
             None => {
-                let inserted = self
-                    .insert_post(
-                        post,
-                        author,
-                    )
-                    .await?;
+                let inserted = self.insert_post(post, author).await?;
                 (inserted, true)
             }
         };
