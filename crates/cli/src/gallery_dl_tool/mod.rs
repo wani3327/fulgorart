@@ -76,12 +76,12 @@ pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
         // find metadata
         let (sha256, width, height) = image_metadata(&data);
         let content_type = content_type_for_ext(&item_info.extension);
-        let s3_key = R2Client::canonical_key(
+        let s3_key_base = R2Client::canonical_key_base(
             &post_info.source_type,
             &item_info.filename,
-            &item_info.extension,
         );
-        let thumbnail_s3_key = R2Client::thumbnail_key(&s3_key);
+        // let original_s3_key = R2Client::original_key(&s3_key, );
+        // let thumbnail_s3_key = R2Client::thumbnail_key(&s3_key);
         let file_size = data.len() as i64;
         let raw_json = String::from_utf8(post_info.compressed.clone())
             .context("Compressed Pixiv metadata was not valid UTF-8 JSON")?;
@@ -107,8 +107,7 @@ pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
                 }),
                 &GalleryImportImageArgs {
                     sha256: &sha256,
-                    s3_key: &s3_key,
-                    thumbnail_s3_key: Some(&thumbnail_s3_key),
+                    s3_key_base: &s3_key_base,
                     filename: Some(&item_info.filename),
                     width,
                     height,
@@ -156,13 +155,13 @@ pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
         upload_tasks.spawn(async move {
             let _permit = permit;
             let upload_result = r2
-                .upload_with_thumbnail(&s3_key, data, content_type)
+                .upload_with_thumbnail(&s3_key_base, data, content_type)
                 .await
                 .with_context(|| {
                     format!(
                         "Failed to upload '{}' to key '{}'",
                         image_path.display(),
-                        s3_key
+                        s3_key_base
                     )
                 });
 
@@ -171,7 +170,7 @@ pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
                     db.update_tag_job_status(job_id, "uploaded", None).await?;
                     println!(
                         "uploaded filename={} image_id={} key={}",
-                        filename, image_id, s3_key
+                        filename, image_id, s3_key_base
                     );
                 }
                 Err(error) => {

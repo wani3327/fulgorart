@@ -1,8 +1,7 @@
 use anyhow::{Context, Result};
 use aws_sdk_s3::primitives::ByteStream;
-use chrono::Utc;
 use image::ImageFormat;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::instrument;
 
 #[derive(Debug, Clone)]
@@ -108,18 +107,19 @@ impl R2Client {
     #[instrument(skip(self, data))]
     pub async fn upload_with_thumbnail(
         &self,
-        key: &str,
+        key_base: &str,
         data: Vec<u8>,
         content_type: &str,
-    ) -> Result<String> {
-        let thumbnail_key = Self::thumbnail_key(key);
+    ) -> Result<()> {
+        let original_key = Self::original_key(key_base);
+        let thumbnail_key = Self::thumbnail_key(key_base);
         let thumbnail_data = Self::build_thumbnail_webp(&data)?;
 
-        self.upload(key, data, content_type).await?;
+        self.upload(&original_key, data, content_type).await?;
         self.upload(&thumbnail_key, thumbnail_data, "image/webp")
             .await?;
 
-        Ok(thumbnail_key)
+        Ok(())
     }
 
     pub fn object_url(&self, key: &str) -> String {
@@ -146,13 +146,20 @@ impl R2Client {
         Ok(presigned_request.uri().to_string())
     }
 
-    pub fn canonical_key(category: &str, filename: &str, extension: &str) -> String {
-        let now = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
-        format!("{}/{}.{}.{}", category, filename, now, extension)
+    pub fn canonical_key_base(category: &str, filename: &str) -> String {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        format!("{category}/{filename}.{now}")
     }
 
-    pub fn thumbnail_key(key: &str) -> String {
-        format!("{key}.thumbnail.webp")
+    fn original_key(key: &str) -> String {
+        format!("{key}/original")
+    }
+
+    fn thumbnail_key(key: &str) -> String {
+        format!("{key}/thumbnail")
     }
 
     fn build_thumbnail_webp(data: &[u8]) -> Result<Vec<u8>> {
