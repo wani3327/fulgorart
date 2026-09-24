@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use aws_sdk_s3::primitives::ByteStream;
-use chrono::Utc;
-use std::time::Duration;
+use image::ImageFormat;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::instrument;
 
 #[derive(Debug, Clone)]
@@ -33,6 +33,8 @@ pub struct R2Client {
 }
 
 impl R2Client {
+    const THUMBNAIL_MAX_DIMENSION: u32 = 480;
+
     pub async fn new(config: &R2Config) -> Result<Self> {
         use aws_credential_types::Credentials;
 
@@ -102,6 +104,24 @@ impl R2Client {
         Ok(())
     }
 
+    #[instrument(skip(self, data))]
+    pub async fn upload_with_thumbnail(
+        &self,
+        key_base: &str,
+        data: Vec<u8>,
+        content_type: &str,
+    ) -> Result<()> {
+        let original_key = Self::original_key(key_base);
+        let thumbnail_key = Self::thumbnail_key(key_base);
+        let thumbnail_data = Self::build_thumbnail_webp(&data)?;
+
+        self.upload(&original_key, data, content_type).await?;
+        self.upload(&thumbnail_key, thumbnail_data, "image/webp")
+            .await?;
+
+        Ok(())
+    }
+
     pub fn object_url(&self, key: &str) -> String {
         format!(
             "{}/{}/{}",
@@ -126,8 +146,31 @@ impl R2Client {
         Ok(presigned_request.uri().to_string())
     }
 
-    pub fn canonical_key(category: &str, filename: &str, extension: &str) -> String {
-        let now = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
-        format!("{}/{}.{}.{}", category, filename, now, extension)
+    pub fn canonical_key_base(category: &str, filename: &str) -> String {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        format!("{category}/{filename}.{now}")
+    }
+
+    fn original_key(key: &str) -> String {
+        format!("{key}/original")
+    }
+
+    fn thumbnail_key(key: &str) -> String {
+        format!("{key}/thumbnail")
+    }
+
+    fn build_thumbnail_webp(data: &[u8]) -> Result<Vec<u8>> {
+        let image =
+            image::load_from_memory(data).context("Failed to decode image for thumbnail")?;
+        let thumbnail =
+            image.thumbnail(Self::THUMBNAIL_MAX_DIMENSION, Self::THUMBNAIL_MAX_DIMENSION);
+        let mut out = std::io::Cursor::new(Vec::new());
+        thumbnail
+            .write_to(&mut out, ImageFormat::WebP)
+            .context("Failed to encode thumbnail as WebP")?;
+        Ok(out.into_inner())
     }
 }
