@@ -45,11 +45,6 @@ struct AppState {
     presigned_urls: Arc<RwLock<HashMap<String, CachedPresignedUrl>>>,
 }
 
-struct CachedPresignedUrl {
-    url: String,
-    expires_at: Instant,
-}
-
 async fn check_auth(
     State(state): State<AppState>,
     req: Request<axum::body::Body>,
@@ -201,6 +196,13 @@ async fn resolve_image_url(state: &AppState, s3_key: &str, content_type: &str, f
             state.storage.object_url(s3_key)
         }
     }
+}
+
+async fn get_stylesheet() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
+        include_str!("../assets/style.css"),
+    )
 }
 
 async fn get_index(State(state): State<AppState>) -> Html<String> {
@@ -397,6 +399,7 @@ async fn main() -> anyhow::Result<()> {
         presigned_urls: Arc::new(RwLock::new(HashMap::new())),
     };
     let app = Router::new()
+        .route("/style.css", get(get_stylesheet))
         .route("/", get(get_index))
         .route("/api/index/cards", get(get_index_cards))
         .route("/image/:id", get(get_image_page))
