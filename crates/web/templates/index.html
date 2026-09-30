@@ -14,7 +14,7 @@ h1 { padding: 1rem; }
 a { color: #aef; }
 </style>
 </head>
-<body>
+<body data-next-page="{{ next_page }}" data-per-page="{{ per_page }}" data-has-more="{{ has_more }}">
 <h1>FulgorArt (<span id="image-count">{{ count }}</span> images)</h1>
 <div class="grid" id="image-grid">{{ cards_html|safe }}</div>
 <div class="sentinel" id="scroll-sentinel"></div>
@@ -23,10 +23,11 @@ a { color: #aef; }
   const grid = document.getElementById('image-grid');
   const count = document.getElementById('image-count');
   const sentinel = document.getElementById('scroll-sentinel');
-  let nextPage = {{ next_page }};
-  const perPage = {{ per_page }};
+  const { nextPage: nextPageValue, perPage: perPageValue, hasMore: hasMoreValue } = document.body.dataset;
+  let nextPage = Number(nextPageValue);
+  const perPage = Number(perPageValue);
   let loading = false;
-  let hasMore = {{ has_more }};
+  let hasMore = hasMoreValue === 'true';
 
   const observer = new IntersectionObserver((entries) => {
     if (entries.some((entry) => entry.isIntersecting)) {
