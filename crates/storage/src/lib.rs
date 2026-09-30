@@ -111,8 +111,8 @@ impl R2Client {
         data: Vec<u8>,
         content_type: &str,
     ) -> Result<()> {
-        let original_key = Self::original_key(key_base);
-        let thumbnail_key = Self::thumbnail_key(key_base);
+        let original_key = original_key(key_base);
+        let thumbnail_key = thumbnail_key(key_base);
         let thumbnail_data = Self::build_thumbnail_webp(&data)?;
 
         self.upload(&original_key, data, content_type).await?;
@@ -139,6 +139,9 @@ impl R2Client {
             .get_object()
             .bucket(&self.bucket)
             .key(key)
+            // .response_content_type(input)
+            //             .response_content_disposition(r#"attachment;
+            // filename=image.jpg""#)
             .presigned(presigning_config)
             .await
             .with_context(|| format!("Failed to presign object URL for key {key}"))?;
@@ -154,14 +157,6 @@ impl R2Client {
         format!("{category}/{filename}.{now}")
     }
 
-    fn original_key(key: &str) -> String {
-        format!("{key}/original")
-    }
-
-    fn thumbnail_key(key: &str) -> String {
-        format!("{key}/thumbnail")
-    }
-
     fn build_thumbnail_webp(data: &[u8]) -> Result<Vec<u8>> {
         let image =
             image::load_from_memory(data).context("Failed to decode image for thumbnail")?;
@@ -173,4 +168,12 @@ impl R2Client {
             .context("Failed to encode thumbnail as WebP")?;
         Ok(out.into_inner())
     }
+}
+
+pub fn original_key(key_base: &str) -> String {
+    format!("{key_base}/original")
+}
+
+pub fn thumbnail_key(key_base: &str) -> String {
+    format!("{key_base}/thumbnail")
 }

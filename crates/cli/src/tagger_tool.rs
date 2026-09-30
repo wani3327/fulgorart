@@ -116,7 +116,10 @@ pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
 
         for job in &jobs {
             let result = async {
-                let key = job.s3_key.strip_prefix("r2://").unwrap_or(&job.s3_key);
+                let key = job
+                    .s3_key_base
+                    .strip_prefix("r2://")
+                    .unwrap_or(&job.s3_key_base);
                 let bytes = r2
                     .download(key)
                     .await
@@ -128,7 +131,7 @@ pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
             match result {
                 Ok(()) => {
                     db.update_tag_job_status(job.job_id, "tagged", None).await?;
-                    println!("tagged image_id={} key={}", job.image_id, job.s3_key);
+                    println!("tagged image_id={} key={}", job.image_id, job.s3_key_base);
                 }
                 Err(error) => {
                     let message = format!("{error:#}");

@@ -76,12 +76,7 @@ pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
         // find metadata
         let (sha256, width, height) = image_metadata(&data);
         let content_type = content_type_for_ext(&item_info.extension);
-        let s3_key_base = R2Client::canonical_key_base(
-            &post_info.source_type,
-            &item_info.filename,
-        );
-        // let original_s3_key = R2Client::original_key(&s3_key, );
-        // let thumbnail_s3_key = R2Client::thumbnail_key(&s3_key);
+        let s3_key_base = R2Client::canonical_key_base(&post_info.source_type, &item_info.filename);
         let file_size = data.len() as i64;
         let raw_json = String::from_utf8(post_info.compressed.clone())
             .context("Compressed Pixiv metadata was not valid UTF-8 JSON")?;
@@ -131,7 +126,7 @@ pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
                     image_path.display(),
                     sha256,
                     existing_asset.id,
-                    existing_asset.s3_key
+                    existing_asset.s3_key_base
                 ),
                 None => println!(
                     "skipped_duplicate filename={} path={} sha256={} reason=claim_lost",

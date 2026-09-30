@@ -10,7 +10,7 @@ use axum::{
 };
 use base64::Engine;
 use fulgorart_db::{Db, DbConfig, ImageAssetRow, TagRow};
-use fulgorart_storage::{R2Client, R2Config};
+use fulgorart_storage::{self as storage, R2Client, R2Config};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
@@ -112,8 +112,8 @@ async fn get_index(State(state): State<AppState>) -> Html<String> {
     let images = state.db.list_image_assets(1, 50).await.unwrap_or_default();
     let mut cards = String::new();
     for img in &images {
-        let dashboard_key = img.thumbnail_s3_key.as_deref().unwrap_or(&img.s3_key);
-        let url = resolve_image_url(&state, dashboard_key).await;
+        let dashboard_key = storage::thumbnail_key(&img.s3_key_base);
+        let url = resolve_image_url(&state, &dashboard_key).await;
         cards.push_str(&format!(
             r#"<div class="card">
   <a href="/image/{id}"><img src="{url}" loading="lazy" alt="image {id}"/></a>
@@ -160,7 +160,7 @@ async fn get_image_page(
         .ok_or(StatusCode::NOT_FOUND)?;
 
     let tags = state.db.get_image_tags(id).await.unwrap_or_default();
-    let url = resolve_image_url(&state, &asset.s3_key).await;
+    let url = resolve_image_url(&state, &asset.s3_key_base).await;
     let tag_list = tags
         .iter()
         .map(|tag| {
