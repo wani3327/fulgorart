@@ -62,7 +62,7 @@ pub struct ImageAssetRow {
     pub id: i64,
     pub post_id: Option<i64>,
     pub sha256: String,
-    pub s3_key: String,
+    pub s3_key_base: String,
     pub filename: Option<String>,
     pub width: Option<i64>,
     pub height: Option<i64>,
@@ -118,7 +118,7 @@ pub struct SourceAccountRow {
 pub struct TagJobWithKey {
     pub job_id: i64,
     pub image_id: i64,
-    pub s3_key: String,
+    pub s3_key_base: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -156,7 +156,7 @@ pub struct GalleryImportAuthorArgs<'a> {
 #[derive(Debug, Clone)]
 pub struct GalleryImportImageArgs<'a> {
     pub sha256: &'a str,
-    pub s3_key: &'a str,
+    pub s3_key_base: &'a str,
     pub filename: Option<&'a str>,
     pub width: Option<i64>,
     pub height: Option<i64>,
@@ -347,12 +347,7 @@ impl Db {
         {
             Some(existing) => (existing, false),
             None => {
-                let inserted = self
-                    .insert_post(
-                        post,
-                        author,
-                    )
-                    .await?;
+                let inserted = self.insert_post(post, author).await?;
                 (inserted, true)
             }
         };
@@ -361,7 +356,7 @@ impl Db {
             .claim_image_asset_upload_with_filename(
                 Some(post_row.id),
                 image.sha256,
-                image.s3_key,
+                image.s3_key_base,
                 image.filename,
                 image.width,
                 image.height,
@@ -384,7 +379,7 @@ impl Db {
         &self,
         post_id: Option<i64>,
         sha256: &str,
-        s3_key: &str,
+        s3_key_base: &str,
         width: Option<i64>,
         height: Option<i64>,
         file_size: Option<i64>,
@@ -394,7 +389,7 @@ impl Db {
         self.insert_image_asset_with_filename(
             post_id,
             sha256,
-            s3_key,
+            s3_key_base,
             None,
             width,
             height,
@@ -409,7 +404,7 @@ impl Db {
         &self,
         post_id: Option<i64>,
         sha256: &str,
-        s3_key: &str,
+        s3_key_base: &str,
         filename: Option<&str>,
         width: Option<i64>,
         height: Option<i64>,
@@ -418,10 +413,10 @@ impl Db {
         source_url: Option<&str>,
     ) -> Result<ImageAssetRow> {
         sqlx::query(
-            "INSERT INTO image_asset (post_id, sha256, s3_key, filename, width, height, file_size, content_type, source_url)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "INSERT INTO image_asset (post_id, sha256, s3_key_base, filename, width, height, file_size, content_type, source_url)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(sha256) DO UPDATE SET
-                s3_key = excluded.s3_key,
+                s3_key_base = excluded.s3_key_base,
                 post_id = COALESCE(image_asset.post_id, excluded.post_id),
                 filename = COALESCE(excluded.filename, image_asset.filename),
                 source_url = COALESCE(excluded.source_url, image_asset.source_url),
@@ -429,7 +424,7 @@ impl Db {
         )
         .bind(post_id)
         .bind(sha256)
-        .bind(s3_key)
+        .bind(s3_key_base)
         .bind(filename)
         .bind(width)
         .bind(height)
@@ -466,7 +461,7 @@ impl Db {
         &self,
         post_id: Option<i64>,
         sha256: &str,
-        s3_key: &str,
+        s3_key_base: &str,
         filename: Option<&str>,
         width: Option<i64>,
         height: Option<i64>,
@@ -476,12 +471,12 @@ impl Db {
     ) -> Result<Option<ClaimedImageUpload>> {
         let mut tx = self.pool.begin().await?;
         let result = sqlx::query(
-            "INSERT OR IGNORE INTO image_asset (post_id, sha256, s3_key, filename, width, height, file_size, content_type, source_url)
+            "INSERT OR IGNORE INTO image_asset (post_id, sha256, s3_key_base, filename, width, height, file_size, content_type, source_url)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         .bind(post_id)
         .bind(sha256)
-        .bind(s3_key)
+        .bind(s3_key_base)
         .bind(filename)
         .bind(width)
         .bind(height)
@@ -742,7 +737,7 @@ impl Db {
 
     pub async fn get_pending_tag_jobs_with_keys(&self, limit: i64) -> Result<Vec<TagJobWithKey>> {
         let rows = sqlx::query_as::<_, (i64, i64, String)>(
-            "SELECT tj.id, tj.image_id, ia.s3_key
+            "SELECT tj.id, tj.image_id, ia.s3_key_base
              FROM tag_job tj
              JOIN image_asset ia ON tj.image_id = ia.id
              WHERE tj.status = 'uploaded'
@@ -754,10 +749,10 @@ impl Db {
         .await?;
         Ok(rows
             .into_iter()
-            .map(|(job_id, image_id, s3_key)| TagJobWithKey {
+            .map(|(job_id, image_id, s3_key_base)| TagJobWithKey {
                 job_id,
                 image_id,
-                s3_key,
+                s3_key_base,
             })
             .collect())
     }

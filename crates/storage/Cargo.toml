@@ -14,3 +14,4 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 bytes = "1"
 chrono = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }

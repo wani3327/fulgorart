@@ -2,6 +2,7 @@ use anyhow::{anyhow, Result};
 use serde::Deserialize;
 
 use fulgorart_db::{Db, TagJobWithKey};
+use fulgorart_storage as storage;
 
 #[derive(Deserialize)]
 struct TagResult {
@@ -90,7 +91,8 @@ impl CloudRunJob {
             .set_args(
                 pending_jobs
                     .iter()
-                    .map(|job| format!("r2://{}", job.s3_key)),
+                    .map(|job| storage::original_key(&job.s3_key_base))
+                    .map(|k| format!("r2://{}", k)),
             );
 
         // let co = overrides::ContainerOverride::new().set_args(Vec::<String>::new());
@@ -121,7 +123,7 @@ pub async fn run(db_connection: Db, cloud_run: &CloudRunJob) -> Result<()> {
     let pending_jobs = vec![TagJobWithKey {
         job_id: 0,
         image_id: 0,
-        s3_key: "119053188_p0.jpg".to_string(),
+        s3_key_base: "119053188_p0.jpg".to_string(),
     }];
 
     let execution = cloud_run.trigger(&pending_jobs).await?;
@@ -135,9 +137,9 @@ pub async fn run(db_connection: Db, cloud_run: &CloudRunJob) -> Result<()> {
     let entries = cloud_run.retrieve_log(task_id).await?;
     // let entries = self.retrieve_log("fulgorart-tagger-78tkn").await?;
 
-    let find_ids = |key: &str| {
+    let find_ids = |kb: &str| {
         for job in &pending_jobs {
-            if key == job.s3_key {
+            if kb == job.s3_key_base {
                 return Some((job.job_id, job.image_id));
             }
         }

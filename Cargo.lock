@@ -1451,6 +1451,7 @@ dependencies = [
  "aws-sdk-s3",
  "bytes",
  "chrono",
+ "image",
  "serde",
  "thiserror 1.0.69",
  "tokio",
