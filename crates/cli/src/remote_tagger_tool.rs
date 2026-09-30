@@ -117,14 +117,8 @@ pub async fn run(db_connection: Db, cloud_run: &CloudRunJob) -> Result<()> {
         .await?;
 
     if pending_jobs.is_empty() {
-        // return Ok(())
+        return Ok(())
     }
-
-    let pending_jobs = vec![TagJobWithKey {
-        job_id: 0,
-        image_id: 0,
-        s3_key_base: "119053188_p0.jpg".to_string(),
-    }];
 
     let execution = cloud_run.trigger(&pending_jobs).await?;
     let task_id = execution
@@ -135,7 +129,6 @@ pub async fn run(db_connection: Db, cloud_run: &CloudRunJob) -> Result<()> {
     println!("task id: {task_id}");
 
     let entries = cloud_run.retrieve_log(task_id).await?;
-    // let entries = self.retrieve_log("fulgorart-tagger-78tkn").await?;
 
     let find_ids = |kb: &str| {
         for job in &pending_jobs {

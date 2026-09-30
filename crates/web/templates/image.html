@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<title>Image {{ id }}</title>
+<style>
+body { font-family: sans-serif; background: #111; color: #eee; margin: 0; padding: 1rem; }
+img { max-width: 100%; max-height: 80vh; }
+.tag { background: #333; padding: 4px 8px; border-radius: 4px; margin: 2px; display: inline-block; }
+button { background: none; border: none; color: #f88; cursor: pointer; }
+input { background: #222; color: #eee; border: 1px solid #444; padding: 4px; }
+a { color: #aef; }
+</style>
+</head>
+<body>
+<a href="/">← Back</a>
+<h2>Image #{{ id }}</h2>
+<p><a href="{{ url }}" target="_blank">{{ url }}</a></p>
+<img src="{{ url }}" alt="image {{ id }}"/>
+<h3>Tags</h3>
+<div id="tags">
+{% for tag in tags %}
+<span class="tag" data-id="{{ tag.id }}">{{ tag.name }} <button onclick="removeTag({{ id }}, {{ tag.id }})">×</button></span>
+{% endfor %}
+</div>
+<div>
+  <input id="newtag" placeholder="add tag..." list="taglist"/>
+  <button onclick="addTag({{ id }})">Add</button>
+</div>
+<script>
+async function addTag(imageId) {
+  const tag = document.getElementById('newtag').value.trim();
+  if (!tag) return;
+  await fetch('/api/images/' + imageId + '/tags', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({tag})
+  });
+  location.reload();
+}
+async function removeTag(imageId, tagId) {
+  await fetch('/api/images/' + imageId + '/tags/' + tagId, {method: 'DELETE'});
+  location.reload();
+}
+</script>
+</body>
+</html>

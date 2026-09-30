@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>FulgorArt</title>
+<style>
+body { font-family: sans-serif; margin: 0; background: #111; color: #eee; }
+h1 { padding: 1rem; }
+.grid { display: flex; flex-wrap: wrap; gap: 8px; padding: 1rem; }
+.card { width: 200px; height: 200px; overflow: hidden; background: #222; }
+.card img { width: 100%; height: 100%; object-fit: cover; }
+.sentinel { height: 1px; }
+a { color: #aef; }
+</style>
+</head>
+<body>
+<h1>FulgorArt (<span id="image-count">{{ count }}</span> images)</h1>
+<div class="grid" id="image-grid">{{ cards_html|safe }}</div>
+<div class="sentinel" id="scroll-sentinel"></div>
+<script>
+(() => {
+  const grid = document.getElementById('image-grid');
+  const count = document.getElementById('image-count');
+  const sentinel = document.getElementById('scroll-sentinel');
+  let nextPage = {{ next_page }};
+  const perPage = {{ per_page }};
+  let loading = false;
+  let hasMore = {{ has_more }};
+
+  const observer = new IntersectionObserver((entries) => {
+    if (entries.some((entry) => entry.isIntersecting)) {
+      loadMore();
+    }
+  }, { rootMargin: '800px' });
+
+  async function loadMore() {
+    if (loading || !hasMore) return;
+    loading = true;
+
+    try {
+      const response = await fetch(`/api/index/cards?page=${nextPage}&per_page=${perPage}`);
+      if (!response.ok) {
+        return;
+      }
+
+      const html = await response.text();
+      const responseHasMore = response.headers.get('x-has-more') === 'true';
+      const container = document.createElement('div');
+      container.innerHTML = html;
+      while (container.firstChild) {
+        grid.appendChild(container.firstChild);
+      }
+      count.textContent = String(grid.children.length);
+      nextPage += 1;
+      hasMore = responseHasMore;
+      if (!hasMore) {
+        observer.disconnect();
+      }
+    } finally {
+      loading = false;
+    }
+  }
+
+  observer.observe(sentinel);
+  if (!hasMore) {
+    observer.disconnect();
+  }
+})();
+</script>
+</body>
+</html>

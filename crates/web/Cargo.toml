@@ -8,6 +8,7 @@ name = "fulgorart-web"
 path = "src/main.rs"
 
 [dependencies]
+askama = "0.12"
 fulgorart-db = { path = "../db" }
 fulgorart-storage = { path = "../storage" }
 axum = { version = "0.7", features = ["macros"] }

@@ -1,0 +1,5 @@
+{% for image in images %}
+<div class="card">
+  <a href="/image/{{ image.id }}"><img src="{{ image.url }}" loading="lazy" alt="image {{ image.id }}"/></a>
+</div>
+{% endfor %}

@@ -6,12 +6,13 @@ use std::{
 
 use axum::{
     extract::{Path, Query, State},
-    http::{Request, StatusCode},
+    http::{header, HeaderValue, Request, StatusCode},
     middleware::{self, Next},
-    response::{Html, Json, Response},
+    response::{Html, IntoResponse, Json, Response},
     routing::{delete, get, post},
     Router,
 };
+use askama::Template;
 use base64::Engine;
 use fulgorart_db::{Db, DbConfig, ImageAssetRow, TagRow};
 use fulgorart_storage::{self as storage, R2Client, R2Config};
@@ -103,8 +104,78 @@ struct ImageWithTags {
     tags: Vec<TagRow>,
 }
 
+#[derive(Clone, Debug)]
+struct ImageCardView {
+    id: i64,
+    url: String,
+}
+
+#[derive(Clone, Debug)]
+struct TagView {
+    id: i64,
+    name: String,
+}
+
+#[derive(Template)]
+#[template(path = "index.html")]
+struct IndexTemplate {
+    count: usize,
+    cards_html: String,
+    has_more: bool,
+    next_page: i64,
+    per_page: i64,
+}
+
+#[derive(Template)]
+#[template(path = "image.html")]
+struct ImageTemplate {
+    id: i64,
+    url: String,
+    tags: Vec<TagView>,
+}
+
+#[derive(Template)]
+#[template(path = "index_cards.html")]
+struct IndexCardsTemplate {
+    images: Vec<ImageCardView>,
+}
+
+#[derive(Deserialize)]
+struct IndexPageQuery {
+    page: Option<i64>,
+    per_page: Option<i64>,
+}
+
 const IMAGE_URL_TTL_SECS: u64 = 60 * 60;
 const IMAGE_URL_CACHE_REFRESH_SECS: u64 = 5;
+const INDEX_PAGE_SIZE: i64 = 60;
+
+async fn load_index_images(
+    state: &AppState,
+    page: i64,
+    per_page: i64,
+) -> Result<(Vec<ImageCardView>, bool), StatusCode> {
+    let fetch_limit = per_page.saturating_add(1);
+    let images = state
+        .db
+        .list_image_assets(page, fetch_limit)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let has_more = images.len() as i64 > per_page;
+    let mut rendered_images = Vec::with_capacity(images.len().min(per_page as usize));
+
+    for img in images.into_iter().take(per_page as usize) {
+        let dashboard_key = storage::thumbnail_key(&img.s3_key_base);
+        let def_filename = "image".to_string();
+        let filename = img.filename.as_ref().unwrap_or(&def_filename);
+        let url = resolve_image_url(state, &dashboard_key, &img.content_type, &filename).await;
+
+        rendered_images.push(ImageCardView { id: img.id, url });
+    }
+
+    Ok((rendered_images, has_more))
+}
 
 async fn resolve_image_url(state: &AppState, s3_key: &str, content_type: &str, filename: &str) -> String {
     let ttl = Duration::from_secs(IMAGE_URL_TTL_SECS);
@@ -133,47 +204,45 @@ async fn resolve_image_url(state: &AppState, s3_key: &str, content_type: &str, f
 }
 
 async fn get_index(State(state): State<AppState>) -> Html<String> {
-    let images = state.db.list_image_assets(1, 50).await.unwrap_or_default();
-    let mut cards = String::new();
-
-    for img in &images {
-        let dashboard_key = storage::thumbnail_key(&img.s3_key_base);
-        let def_filename = "image".to_string();
-        let filename = img.filename.as_ref().unwrap_or(&def_filename);
-        let url = resolve_image_url(&state, &dashboard_key, &img.content_type, &filename).await;
-
-        cards.push_str(&format!(
-            r#"<div class="card">
-  <a href="/image/{id}"><img src="{url}" loading="lazy" alt="image {id}"/></a>
-</div>"#,
-            id = img.id,
-            url = url,
-        ));
+    let (rendered_images, has_more) = load_index_images(&state, 1, INDEX_PAGE_SIZE)
+        .await
+        .expect("index page should load");
+    let count = rendered_images.len();
+    let cards_html = IndexCardsTemplate {
+        images: rendered_images,
     }
-    Html(format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>FulgorArt</title>
-<style>
-body {{ font-family: sans-serif; margin: 0; background: #111; color: #eee; }}
-h1 {{ padding: 1rem; }}
-.grid {{ display: flex; flex-wrap: wrap; gap: 8px; padding: 1rem; }}
-.card {{ width: 200px; height: 200px; overflow: hidden; background: #222; }}
-.card img {{ width: 100%; height: 100%; object-fit: cover; }}
-a {{ color: #aef; }}
-</style>
-</head>
-<body>
-<h1>FulgorArt ({count} images)</h1>
-<div class="grid">{cards}</div>
-</body>
-</html>"#,
-        count = images.len(),
-        cards = cards,
-    ))
+    .render()
+    .expect("index cards template rendering should succeed");
+
+    Html(
+        IndexTemplate {
+            count,
+            cards_html,
+            has_more,
+            next_page: 2,
+            per_page: INDEX_PAGE_SIZE,
+        }
+        .render()
+        .expect("index template rendering should succeed"),
+    )
+}
+
+async fn get_index_cards(
+    State(state): State<AppState>,
+    Query(q): Query<IndexPageQuery>,
+) -> Result<Response, StatusCode> {
+    let page = q.page.unwrap_or(1).max(1);
+    let per_page = q.per_page.unwrap_or(INDEX_PAGE_SIZE).clamp(1, 120);
+    let (images, has_more) = load_index_images(&state, page, per_page).await?;
+    let body = IndexCardsTemplate { images }
+        .render()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let mut response = Html(body).into_response();
+    response
+        .headers_mut()
+        .insert(header::HeaderName::from_static("x-has-more"), HeaderValue::from_static(if has_more { "true" } else { "false" }));
+    Ok(response)
 }
 
 async fn get_image_page(
@@ -193,65 +262,23 @@ async fn get_image_page(
     let url = resolve_image_url(&state, &s3_key, &asset.content_type, &filename).await;
 
     let tags = state.db.get_image_tags(id).await.unwrap_or_default();
-    let tag_list = tags
-        .iter()
-        .map(|tag| {
-            format!(
-                r#"<span class="tag" data-id="{}">{} <button onclick="removeTag({},{})">×</button></span>"#,
-                tag.id, tag.name, id, tag.id
-            )
+    let rendered_tags = tags
+        .into_iter()
+        .map(|tag| TagView {
+            id: tag.id,
+            name: tag.name,
         })
-        .collect::<Vec<_>>()
-        .join(" ");
+        .collect::<Vec<_>>();
 
-    Ok(Html(format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8"/>
-<title>Image {id}</title>
-<style>
-body {{ font-family: sans-serif; background: #111; color: #eee; margin: 0; padding: 1rem; }}
-img {{ max-width: 100%; max-height: 80vh; }}
-.tag {{ background: #333; padding: 4px 8px; border-radius: 4px; margin: 2px; display: inline-block; }}
-button {{ background: none; border: none; color: #f88; cursor: pointer; }}
-input {{ background: #222; color: #eee; border: 1px solid #444; padding: 4px; }}
-a {{ color: #aef; }}
-</style>
-</head>
-<body>
-<a href="/">← Back</a>
-<h2>Image #{id}</h2>
-<p><a href="{url}" target="_blank">{url}</a></p>
-<img src="{url}" alt="image {id}"/>
-<h3>Tags</h3>
-<div id="tags">{tag_list}</div>
-<div>
-  <input id="newtag" placeholder="add tag..." list="taglist"/>
-  <button onclick="addTag({id})">Add</button>
-</div>
-<script>
-async function addTag(imageId) {{
-  const tag = document.getElementById('newtag').value.trim();
-  if (!tag) return;
-  await fetch('/api/images/' + imageId + '/tags', {{
-    method: 'POST',
-    headers: {{'Content-Type': 'application/json'}},
-    body: JSON.stringify({{tag}})
-  }});
-  location.reload();
-}}
-async function removeTag(imageId, tagId) {{
-  await fetch('/api/images/' + imageId + '/tags/' + tagId, {{method: 'DELETE'}});
-  location.reload();
-}}
-</script>
-</body>
-</html>"#,
-        id = id,
-        url = url,
-        tag_list = tag_list,
-    )))
+    Ok(Html(
+        ImageTemplate {
+            id,
+            url,
+            tags: rendered_tags,
+        }
+        .render()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+    ))
 }
 
 async fn api_list_images(
@@ -371,6 +398,7 @@ async fn main() -> anyhow::Result<()> {
     };
     let app = Router::new()
         .route("/", get(get_index))
+        .route("/api/index/cards", get(get_index_cards))
         .route("/image/:id", get(get_image_page))
         .route("/api/images", get(api_list_images))
         .route("/api/images/:id", get(api_get_image))
