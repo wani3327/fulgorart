@@ -1,4 +1,8 @@
-use std::time::Duration;
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use axum::{
     extract::{Path, Query, State},
@@ -12,6 +16,7 @@ use base64::Engine;
 use fulgorart_db::{Db, DbConfig, ImageAssetRow, TagRow};
 use fulgorart_storage::{self as storage, R2Client, R2Config};
 use serde::{Deserialize, Serialize};
+use tokio::sync::RwLock;
 
 #[derive(Debug, Clone)]
 struct WebConfig {
@@ -36,6 +41,12 @@ struct AppState {
     db: Db,
     storage: R2Client,
     config: WebConfig,
+    presigned_urls: Arc<RwLock<HashMap<String, CachedPresignedUrl>>>,
+}
+
+struct CachedPresignedUrl {
+    url: String,
+    expires_at: Instant,
 }
 
 async fn check_auth(
@@ -93,14 +104,27 @@ struct ImageWithTags {
 }
 
 const IMAGE_URL_TTL_SECS: u64 = 60 * 60;
+const IMAGE_URL_CACHE_REFRESH_SECS: u64 = 5;
 
-async fn resolve_image_url(state: &AppState, s3_key: &str) -> String {
+async fn resolve_image_url(state: &AppState, s3_key: &str, content_type: &str, filename: &str) -> String {
+    let ttl = Duration::from_secs(IMAGE_URL_TTL_SECS);
     match state
         .storage
-        .presigned_object_url(s3_key, Duration::from_secs(IMAGE_URL_TTL_SECS))
+        .presigned_object_url(s3_key, ttl, content_type, filename)
         .await
     {
-        Ok(url) => url,
+        Ok(url) => {
+            let expires_at = Instant::now()
+                + ttl.saturating_sub(Duration::from_secs(IMAGE_URL_CACHE_REFRESH_SECS));
+            state.presigned_urls.write().await.insert(
+                s3_key.to_owned(),
+                CachedPresignedUrl {
+                    url: url.clone(),
+                    expires_at,
+                },
+            );
+            url
+        }
         Err(error) => {
             tracing::warn!(%s3_key, ?error, "Failed to create presigned URL, falling back to object URL");
             state.storage.object_url(s3_key)
@@ -111,9 +135,13 @@ async fn resolve_image_url(state: &AppState, s3_key: &str) -> String {
 async fn get_index(State(state): State<AppState>) -> Html<String> {
     let images = state.db.list_image_assets(1, 50).await.unwrap_or_default();
     let mut cards = String::new();
+
     for img in &images {
         let dashboard_key = storage::thumbnail_key(&img.s3_key_base);
-        let url = resolve_image_url(&state, &dashboard_key).await;
+        let def_filename = "image".to_string();
+        let filename = img.filename.as_ref().unwrap_or(&def_filename);
+        let url = resolve_image_url(&state, &dashboard_key, &img.content_type, &filename).await;
+
         cards.push_str(&format!(
             r#"<div class="card">
   <a href="/image/{id}"><img src="{url}" loading="lazy" alt="image {id}"/></a>
@@ -159,8 +187,12 @@ async fn get_image_page(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
 
+    let s3_key = storage::original_key(&asset.s3_key_base);
+    let def_filename = "image".to_string();
+    let filename = asset.filename.as_ref().unwrap_or(&def_filename);
+    let url = resolve_image_url(&state, &s3_key, &asset.content_type, &filename).await;
+
     let tags = state.db.get_image_tags(id).await.unwrap_or_default();
-    let url = resolve_image_url(&state, &asset.s3_key_base).await;
     let tag_list = tags
         .iter()
         .map(|tag| {
@@ -335,6 +367,7 @@ async fn main() -> anyhow::Result<()> {
         db,
         storage,
         config: config.clone(),
+        presigned_urls: Arc::new(RwLock::new(HashMap::new())),
     };
     let app = Router::new()
         .route("/", get(get_index))

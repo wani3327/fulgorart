@@ -132,16 +132,22 @@ impl R2Client {
     }
 
     #[instrument(skip(self))]
-    pub async fn presigned_object_url(&self, key: &str, ttl: Duration) -> Result<String> {
+    pub async fn presigned_object_url(
+        &self,
+        key: &str,
+        ttl: Duration,
+        content_type: &str,
+        filename: &str,
+    ) -> Result<String> {
         let presigning_config = aws_sdk_s3::presigning::PresigningConfig::expires_in(ttl)?;
         let presigned_request = self
             .client
             .get_object()
             .bucket(&self.bucket)
             .key(key)
-            // .response_content_type(input)
-            //             .response_content_disposition(r#"attachment;
-            // filename=image.jpg""#)
+            .response_cache_control(format!("public, max-age={}", ttl.as_secs()))
+            .response_content_type(content_type)
+            .response_content_disposition(format!(r#"attachment; filename={filename}""#))
             .presigned(presigning_config)
             .await
             .with_context(|| format!("Failed to presign object URL for key {key}"))?;
