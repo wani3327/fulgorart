@@ -23,7 +23,7 @@
   let nextPage = Number(nextPageValue);
   const perPage = Number(perPageValue);
   let loading = false;
-  let hasMore = hasMoreValue === 'true';
+  let hasMore = hasMoreValue === 'True';
 
   const observer = new IntersectionObserver((entries) => {
     if (entries.some((entry) => entry.isIntersecting)) {
