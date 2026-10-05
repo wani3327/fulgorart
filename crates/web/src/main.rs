@@ -1,3 +1,5 @@
+mod api;
+
 use std::{
     collections::HashMap,
     sync::Arc,
@@ -8,14 +10,14 @@ use axum::{
     extract::{Path, Query, State},
     http::{header, HeaderValue, Request, StatusCode},
     middleware::{self, Next},
-    response::{Html, IntoResponse, Json, Response},
+    response::{Html, IntoResponse, Response},
     routing::{delete, get, post},
     Router,
 };
-use askama::Template;
 use base64::Engine;
-use fulgorart_db::{Db, DbConfig, ImageAssetRow, TagRow};
+use fulgorart_db::{Db, DbConfig};
 use fulgorart_storage::{self as storage, R2Client, R2Config};
+use minijinja::{context, AutoEscape, Environment};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
@@ -43,6 +45,11 @@ struct AppState {
     storage: R2Client,
     config: WebConfig,
     presigned_urls: Arc<RwLock<HashMap<String, CachedPresignedUrl>>>,
+}
+
+struct CachedPresignedUrl {
+    url: String,
+    expires_at: Instant,
 }
 
 async fn check_auth(
@@ -79,60 +86,34 @@ async fn check_auth(
     }
 }
 
-#[derive(Deserialize)]
-struct TagFilterQuery {
-    page: Option<i64>,
-    per_page: Option<i64>,
-    include: Option<String>,
-    exclude: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct AddTagRequest {
-    tag: String,
-}
-
-#[derive(Serialize)]
-struct ImageWithTags {
-    #[serde(flatten)]
-    asset: ImageAssetRow,
-    tags: Vec<TagRow>,
-}
-
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 struct ImageCardView {
     id: i64,
     url: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 struct TagView {
     id: i64,
     name: String,
 }
 
-#[derive(Template)]
-#[template(path = "index.html")]
-struct IndexTemplate {
-    count: usize,
-    cards_html: String,
-    has_more: bool,
-    next_page: i64,
-    per_page: i64,
-}
-
-#[derive(Template)]
-#[template(path = "image.html")]
-struct ImageTemplate {
-    id: i64,
-    url: String,
-    tags: Vec<TagView>,
-}
-
-#[derive(Template)]
-#[template(path = "index_cards.html")]
-struct IndexCardsTemplate {
-    images: Vec<ImageCardView>,
+fn render_template(name: &str, context: impl Serialize) -> Result<String, minijinja::Error> {
+    let mut environment = Environment::new();
+    environment.set_auto_escape_callback(|name| {
+        if name.ends_with(".html") {
+            AutoEscape::Html
+        } else {
+            AutoEscape::None
+        }
+    });
+    environment.add_template("index.html", include_str!("../templates/index.html"))?;
+    environment.add_template(
+        "index_cards.html",
+        include_str!("../templates/index_cards.html"),
+    )?;
+    environment.add_template("image.html", include_str!("../templates/image.html"))?;
+    environment.get_template(name)?.render(context)
 }
 
 #[derive(Deserialize)]
@@ -172,7 +153,29 @@ async fn load_index_images(
     Ok((rendered_images, has_more))
 }
 
-async fn resolve_image_url(state: &AppState, s3_key: &str, content_type: &str, filename: &str) -> String {
+async fn resolve_image_url(
+    state: &AppState,
+    s3_key: &str,
+    content_type: &str,
+    filename: &str,
+) -> String {
+    // checking cache
+    if let Some(c) = state.presigned_urls.read().await.get(s3_key) {
+        if Instant::now() <= c.expires_at {
+            return c.url.clone();
+        }
+
+        // drop outdated; handle race condition
+        let mut map = state.presigned_urls.write().await;
+        if let Some(c) = map.get(s3_key) {
+            if Instant::now() > c.expires_at {
+                map.remove(s3_key);
+            } else {
+                return c.url.clone();
+            }
+        }
+    }
+
     let ttl = Duration::from_secs(IMAGE_URL_TTL_SECS);
     match state
         .storage
@@ -205,28 +208,31 @@ async fn get_stylesheet() -> impl IntoResponse {
     )
 }
 
-async fn get_index(State(state): State<AppState>) -> Html<String> {
-    let (rendered_images, has_more) = load_index_images(&state, 1, INDEX_PAGE_SIZE)
-        .await
-        .expect("index page should load");
+async fn get_index(State(state): State<AppState>) -> Result<Html<String>, StatusCode> {
+    let (rendered_images, has_more) = load_index_images(&state, 1, INDEX_PAGE_SIZE).await?;
     let count = rendered_images.len();
-    let cards_html = IndexCardsTemplate {
-        images: rendered_images,
-    }
-    .render()
-    .expect("index cards template rendering should succeed");
+    let cards_html = render_template("index_cards.html", context!(images => rendered_images))
+        .map_err(|error| {
+            tracing::error!(?error, "Failed to render index cards template");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
-    Html(
-        IndexTemplate {
-            count,
-            cards_html,
-            has_more,
-            next_page: 2,
-            per_page: INDEX_PAGE_SIZE,
-        }
-        .render()
-        .expect("index template rendering should succeed"),
-    )
+    Ok(Html(
+        render_template(
+            "index.html",
+            context! {
+                count,
+                cards_html,
+                has_more,
+                next_page => 2,
+                per_page => INDEX_PAGE_SIZE,
+            },
+        )
+        .map_err(|error| {
+            tracing::error!(?error, "Failed to render index template");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?,
+    ))
 }
 
 async fn get_index_cards(
@@ -236,14 +242,17 @@ async fn get_index_cards(
     let page = q.page.unwrap_or(1).max(1);
     let per_page = q.per_page.unwrap_or(INDEX_PAGE_SIZE).clamp(1, 120);
     let (images, has_more) = load_index_images(&state, page, per_page).await?;
-    let body = IndexCardsTemplate { images }
-        .render()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let body =
+        render_template("index_cards.html", context!(images => images)).map_err(|error| {
+            tracing::error!(?error, "Failed to render index cards template");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     let mut response = Html(body).into_response();
-    response
-        .headers_mut()
-        .insert(header::HeaderName::from_static("x-has-more"), HeaderValue::from_static(if has_more { "true" } else { "false" }));
+    response.headers_mut().insert(
+        header::HeaderName::from_static("x-has-more"),
+        HeaderValue::from_static(if has_more { "true" } else { "false" }),
+    );
     Ok(response)
 }
 
@@ -261,7 +270,7 @@ async fn get_image_page(
     let s3_key = storage::original_key(&asset.s3_key_base);
     let def_filename = "image".to_string();
     let filename = asset.filename.as_ref().unwrap_or(&def_filename);
-    let url = resolve_image_url(&state, &s3_key, &asset.content_type, &filename).await;
+    let url = resolve_image_url(&state, &s3_key, &asset.content_type, filename).await;
 
     let tags = state.db.get_image_tags(id).await.unwrap_or_default();
     let rendered_tags = tags
@@ -273,110 +282,21 @@ async fn get_image_page(
         .collect::<Vec<_>>();
 
     Ok(Html(
-        ImageTemplate {
-            id,
-            url,
-            tags: rendered_tags,
-        }
-        .render()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
+        render_template(
+            "image.html",
+            context! {
+                id,
+                url,
+                tags => rendered_tags,
+            },
+        )
+        .map_err(|error| {
+            tracing::error!(?error, "Failed to render image template");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?,
     ))
 }
 
-async fn api_list_images(
-    State(state): State<AppState>,
-    Query(q): Query<TagFilterQuery>,
-) -> Result<Json<Vec<ImageWithTags>>, StatusCode> {
-    let page = q.page.unwrap_or(1);
-    let per_page = q.per_page.unwrap_or(20).min(100);
-    let include: Vec<String> = q
-        .include
-        .as_deref()
-        .map(|value| value.split(',').map(str::to_string).collect::<Vec<_>>())
-        .unwrap_or_default();
-    let exclude: Vec<String> = q
-        .exclude
-        .as_deref()
-        .map(|value| value.split(',').map(str::to_string).collect::<Vec<_>>())
-        .unwrap_or_default();
-
-    let assets = state
-        .db
-        .list_image_assets_by_tags(&include, &exclude, page, per_page)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    let mut result = Vec::new();
-    for asset in assets {
-        let tags = state.db.get_image_tags(asset.id).await.unwrap_or_default();
-        result.push(ImageWithTags { asset, tags });
-    }
-    Ok(Json(result))
-}
-
-async fn api_get_image(
-    State(state): State<AppState>,
-    Path(id): Path<i64>,
-) -> Result<Json<ImageWithTags>, StatusCode> {
-    let asset = state
-        .db
-        .get_image_asset_by_id(id)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
-    let tags = state.db.get_image_tags(id).await.unwrap_or_default();
-    Ok(Json(ImageWithTags { asset, tags }))
-}
-
-async fn api_add_tag(
-    State(state): State<AppState>,
-    Path(id): Path<i64>,
-    Json(body): Json<AddTagRequest>,
-) -> Result<StatusCode, StatusCode> {
-    let tag = state
-        .db
-        .get_or_create_tag(&body.tag, None)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    state
-        .db
-        .insert_image_tag(id, tag.id, "manual", None)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(StatusCode::CREATED)
-}
-
-async fn api_delete_tag(
-    State(state): State<AppState>,
-    Path((image_id, tag_id)): Path<(i64, i64)>,
-) -> Result<StatusCode, StatusCode> {
-    state
-        .db
-        .delete_image_tag(image_id, tag_id)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-async fn api_list_tags(
-    State(state): State<AppState>,
-    Query(q): Query<std::collections::HashMap<String, String>>,
-) -> Result<Json<Vec<TagRow>>, StatusCode> {
-    let tags = if let Some(search) = q.get("q") {
-        state
-            .db
-            .search_tags(search)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    } else {
-        state
-            .db
-            .list_all_tags()
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    };
-    Ok(Json(tags))
-}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -403,11 +323,11 @@ async fn main() -> anyhow::Result<()> {
         .route("/", get(get_index))
         .route("/api/index/cards", get(get_index_cards))
         .route("/image/:id", get(get_image_page))
-        .route("/api/images", get(api_list_images))
-        .route("/api/images/:id", get(api_get_image))
-        .route("/api/images/:id/tags", post(api_add_tag))
-        .route("/api/images/:id/tags/:tag_id", delete(api_delete_tag))
-        .route("/api/tags", get(api_list_tags))
+        .route("/api/images", get(api::list_images))
+        .route("/api/images/:id", get(api::get_image))
+        .route("/api/images/:id/tags", post(api::add_tag))
+        .route("/api/images/:id/tags/:tag_id", delete(api::delete_tag))
+        .route("/api/tags", get(api::list_tags))
         .layer(middleware::from_fn_with_state(state.clone(), check_auth))
         .with_state(state);
 

@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use serde::Deserialize;
 
-use fulgorart_db::{Db, TagJobWithKey};
+use fulgorart_db::Db;
 use fulgorart_storage as storage;
 
 #[derive(Deserialize)]
