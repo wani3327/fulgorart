@@ -117,7 +117,7 @@ pub async fn run(db_connection: Db, cloud_run: &CloudRunJob) -> Result<()> {
         .await?;
 
     if pending_jobs.is_empty() {
-        return Ok(())
+        return Ok(());
     }
 
     let execution = cloud_run.trigger(&pending_jobs).await?;
