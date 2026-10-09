@@ -40,13 +40,13 @@ a:hover {
   color: #d1f2ff;
 }
 
-.page-shell {
+.app-shell {
   max-width: 1600px;
   margin: 0 auto;
   padding: 1.25rem;
 }
 
-.page-header {
+.app-header {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
@@ -54,13 +54,13 @@ a:hover {
   padding: 0.75rem 0 1.25rem;
 }
 
-.page-title {
+.app-title {
   margin: 0;
   font-size: clamp(1.6rem, 3vw, 2.4rem);
   letter-spacing: -0.03em;
 }
 
-.page-subtitle {
+.app-subtitle {
   margin: 0;
   color: var(--muted);
   font-size: 0.95rem;
@@ -71,16 +71,28 @@ a:hover {
   font-size: 1.2rem;
 }
 
-.grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 0.9rem;
+.masonry-gallery {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
 }
 
-.card {
+.card-stream {
+  display: none;
+}
+
+.masonry-column {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.masonry-card {
   position: relative;
+  width: 100%;
   overflow: hidden;
-  min-height: 220px;
   border: 1px solid var(--border);
   border-radius: 18px;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02));
@@ -89,25 +101,24 @@ a:hover {
   transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
 }
 
-.card:hover {
+.masonry-card:hover {
   transform: translateY(-2px);
   border-color: rgba(125, 211, 252, 0.35);
   box-shadow: 0 28px 64px rgba(0, 0, 0, 0.45);
 }
 
-.card a,
-.card img {
+.masonry-card a,
+.masonry-card img {
   display: block;
   width: 100%;
-  height: 100%;
 }
 
-.card img {
-  object-fit: cover;
+.masonry-card img {
+  height: auto;
   background: var(--bg-surface);
 }
 
-.card::after {
+.masonry-card::after {
   content: "";
   position: absolute;
   inset: auto 0 0 0;
@@ -116,7 +127,7 @@ a:hover {
   pointer-events: none;
 }
 
-.sentinel {
+.gallery-sentinel {
   height: 1px;
 }
 
@@ -211,21 +222,13 @@ button:hover {
 }
 
 @media (max-width: 720px) {
-  .page-shell {
+  .app-shell {
     padding: 0.75rem;
   }
 
-  .page-header {
+  .app-header {
     flex-direction: column;
     align-items: flex-start;
-  }
-
-  .grid {
-    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  }
-
-  .card {
-    min-height: 180px;
   }
 
   input {

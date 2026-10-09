@@ -7,23 +7,43 @@
 <title>FulgorArt</title>
 </head>
 <body data-next-page="{{ next_page }}" data-per-page="{{ per_page }}" data-has-more="{{ has_more }}">
-<main class="page-shell">
-<header class="page-header">
-  <h1 class="page-title">FulgorArt</h1>
-  <p class="page-subtitle"><span id="image-count">{{ count }}</span> images loaded</p>
+<main class="app-shell">
+<header class="app-header">
+  <h1 class="app-title">FulgorArt</h1>
+  <p class="app-subtitle"><span id="gallery-count">{{ count }}</span> images loaded</p>
 </header>
-<div class="grid" id="image-grid">{{ cards_html|safe }}</div>
-<div class="sentinel" id="scroll-sentinel"></div>
+<div class="masonry-gallery" id="masonry-gallery">
+  <div class="masonry-column" id="masonry-column-left"></div>
+  <div class="masonry-column" id="masonry-column-right"></div>
+  <div class="card-stream" id="card-stream">{{ cards_html|safe }}</div>
+</div>
+<div class="gallery-sentinel" id="gallery-sentinel"></div>
 <script>
 (() => {
-  const grid = document.getElementById('image-grid');
-  const count = document.getElementById('image-count');
-  const sentinel = document.getElementById('scroll-sentinel');
+  const gallery = document.getElementById('masonry-gallery');
+  const leftColumn = document.getElementById('masonry-column-left');
+  const rightColumn = document.getElementById('masonry-column-right');
+  const stream = document.getElementById('card-stream');
+  const count = document.getElementById('gallery-count');
+  const sentinel = document.getElementById('gallery-sentinel');
   const { nextPage: nextPageValue, perPage: perPageValue, hasMore: hasMoreValue } = document.body.dataset;
   let nextPage = Number(nextPageValue);
   const perPage = Number(perPageValue);
   let loading = false;
   let hasMore = hasMoreValue === 'True';
+
+  function appendCards(container) {
+    while (container.firstElementChild) {
+      const card = container.firstElementChild;
+      const targetColumn = leftColumn.offsetHeight <= rightColumn.offsetHeight
+        ? leftColumn
+        : rightColumn;
+      targetColumn.appendChild(card);
+    }
+    count.textContent = String(gallery.querySelectorAll('.masonry-card').length);
+  }
+
+  appendCards(stream);
 
   const observer = new IntersectionObserver((entries) => {
     if (entries.some((entry) => entry.isIntersecting)) {
@@ -45,10 +65,7 @@
       const responseHasMore = response.headers.get('x-has-more') === 'true';
       const container = document.createElement('div');
       container.innerHTML = html;
-      while (container.firstChild) {
-        grid.appendChild(container.firstChild);
-      }
-      count.textContent = String(grid.children.length);
+      appendCards(container);
       nextPage += 1;
       hasMore = responseHasMore;
       if (!hasMore) {
