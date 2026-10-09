@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::AppState;
 
-
 #[derive(Deserialize)]
 pub struct TagFilterQuery {
     page: Option<i64>,

@@ -3,6 +3,7 @@ mod index;
 
 use std::{
     collections::HashMap,
+    path::Path as FsPath,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -18,7 +19,7 @@ use axum::{
 use base64::Engine;
 use fulgorart_db::{Db, DbConfig};
 use fulgorart_storage::{self as storage, R2Client, R2Config};
-use minijinja::{context, AutoEscape, Environment};
+use minijinja::{context, AutoEscape, Environment, Error, ErrorKind};
 use serde::Serialize;
 use tokio::sync::RwLock;
 
@@ -145,7 +146,18 @@ struct TagView {
     name: String,
 }
 
-fn render_template(name: &str, context: impl Serialize) -> Result<String, minijinja::Error> {
+async fn render_template(name: &str, context: impl Serialize) -> Result<String, minijinja::Error> {
+    let path = format!("{}/templates/{}", env!("CARGO_MANIFEST_DIR"), name);
+    let source = tokio::fs::read_to_string(FsPath::new(&path))
+        .await
+        .map_err(|error| {
+            Error::new(
+                ErrorKind::InvalidOperation,
+                format!("failed to read {path:?}"),
+            )
+            .with_source(error)
+        })?;
+
     let mut environment = Environment::new();
     environment.set_auto_escape_callback(|name| {
         if name.ends_with(".html") {
@@ -154,20 +166,23 @@ fn render_template(name: &str, context: impl Serialize) -> Result<String, miniji
             AutoEscape::None
         }
     });
-    environment.add_template("index.html", include_str!("../templates/index.html"))?;
-    environment.add_template(
-        "index_cards.html",
-        include_str!("../templates/index_cards.html"),
-    )?;
-    environment.add_template("image.html", include_str!("../templates/image.html"))?;
+    environment.add_template(name, &source)?;
     environment.get_template(name)?.render(context)
 }
 
-async fn get_stylesheet() -> impl IntoResponse {
-    (
+async fn get_stylesheet() -> Result<impl IntoResponse, StatusCode> {
+    let stylesheet =
+        tokio::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/style.css"))
+            .await
+            .map_err(|error| {
+                tracing::error!(?error, "Failed to read stylesheet");
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+
+    Ok((
         [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
-        include_str!("../assets/style.css"),
-    )
+        stylesheet,
+    ))
 }
 
 async fn get_image_page(
@@ -204,6 +219,7 @@ async fn get_image_page(
                 tags => rendered_tags,
             },
         )
+        .await
         .map_err(|error| {
             tracing::error!(?error, "Failed to render image template");
             StatusCode::INTERNAL_SERVER_ERROR

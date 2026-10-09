@@ -7,11 +7,9 @@ use fulgorart_storage::{self as storage};
 use minijinja::context;
 use serde::{Deserialize, Serialize};
 
-use crate::{AppState, render_template, resolve_image_url};
-
+use crate::{render_template, resolve_image_url, AppState};
 
 const INDEX_PAGE_SIZE: i64 = 60;
-
 
 #[derive(Clone, Debug, Serialize)]
 struct ImageCardView {
@@ -24,7 +22,6 @@ pub(crate) struct IndexPageQuery {
     page: Option<i64>,
     per_page: Option<i64>,
 }
-
 
 /// fetch images from DB for index
 async fn images_for_index(
@@ -43,7 +40,8 @@ async fn images_for_index(
     let mut rendered_images = Vec::with_capacity(images.len().min(per_page as usize));
 
     for img in images.into_iter().take(per_page as usize) {
-        let dashboard_key = storage::thumbnail_key(&img.s3_key_base);
+        let dashboard_key = storage::original_key(&img.s3_key_base); // temporary code for test
+        // let dashboard_key = storage::thumbnail_key(&img.s3_key_base);
         let def_filename = "image".to_string();
         let filename = img.filename.as_ref().unwrap_or(&def_filename);
         let url = resolve_image_url(state, &dashboard_key, &img.content_type, &filename).await;
@@ -58,6 +56,7 @@ pub(crate) async fn get_index(State(state): State<AppState>) -> Result<Html<Stri
     let (rendered_images, has_more) = images_for_index(&state, 1, INDEX_PAGE_SIZE).await?;
     let count = rendered_images.len();
     let cards_html = render_template("index_cards.html", context!(images => rendered_images))
+        .await
         .map_err(|error| {
             tracing::error!(?error, "Failed to render index cards template");
             StatusCode::INTERNAL_SERVER_ERROR
@@ -74,6 +73,7 @@ pub(crate) async fn get_index(State(state): State<AppState>) -> Result<Html<Stri
                 per_page => INDEX_PAGE_SIZE,
             },
         )
+        .await
         .map_err(|error| {
             tracing::error!(?error, "Failed to render index template");
             StatusCode::INTERNAL_SERVER_ERROR
@@ -88,8 +88,9 @@ pub(crate) async fn get_index_cards(
     let page = q.page.unwrap_or(1);
     let per_page = q.per_page.unwrap_or(INDEX_PAGE_SIZE).clamp(1, 120);
     let (images, has_more) = images_for_index(&state, page, per_page).await?;
-    let body =
-        render_template("index_cards.html", context!(images => images)).map_err(|error| {
+    let body = render_template("index_cards.html", context!(images => images))
+        .await
+        .map_err(|error| {
             tracing::error!(?error, "Failed to render index cards template");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;

@@ -107,6 +107,10 @@ make run-web
 
 Then open `http://localhost:3000`.
 
+HTML templates and the stylesheet are read from `crates/web/templates` and
+`crates/web/assets/style.css` for each request, so changes are applied on the
+next request without restarting the web server.
+
 ## CLI usage
 
 ```bash
