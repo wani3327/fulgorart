@@ -167,7 +167,7 @@ impl R2Client {
         let image =
             image::load_from_memory(data).context("Failed to decode image for thumbnail")?;
         let thumbnail =
-            image.thumbnail(Self::THUMBNAIL_MAX_DIMENSION, Self::THUMBNAIL_MAX_DIMENSION);
+            image.thumbnail(Self::THUMBNAIL_MAX_DIMENSION, u32::MAX);
         let mut out = std::io::Cursor::new(Vec::new());
         thumbnail
             .write_to(&mut out, ImageFormat::WebP)
