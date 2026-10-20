@@ -34,6 +34,7 @@ pub struct R2Client {
 
 impl R2Client {
     const THUMBNAIL_MAX_DIMENSION: u32 = 480;
+    const WEBP_QUALITY: f32 = 60.;
 
     pub async fn new(config: &R2Config) -> Result<Self> {
         use aws_credential_types::Credentials;
@@ -166,13 +167,10 @@ impl R2Client {
     fn build_thumbnail_webp(data: &[u8]) -> Result<Vec<u8>> {
         let image =
             image::load_from_memory(data).context("Failed to decode image for thumbnail")?;
-        let thumbnail =
-            image.thumbnail(Self::THUMBNAIL_MAX_DIMENSION, u32::MAX);
-        let mut out = std::io::Cursor::new(Vec::new());
-        thumbnail
-            .write_to(&mut out, ImageFormat::WebP)
-            .context("Failed to encode thumbnail as WebP")?;
-        Ok(out.into_inner())
+        let thumbnail = image.thumbnail(Self::THUMBNAIL_MAX_DIMENSION, u32::MAX);
+        let encoder =
+            webp::Encoder::from_image(&thumbnail).context("Failed to encode thumbnail as WebP")?;
+        Ok(encoder.encode(Self::WEBP_QUALITY).to_vec())
     }
 }
 

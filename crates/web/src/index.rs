@@ -41,7 +41,7 @@ async fn images_for_index(
 
     for img in images.into_iter().take(per_page as usize) {
         let dashboard_key = storage::original_key(&img.s3_key_base); // temporary code for test
-        // let dashboard_key = storage::thumbnail_key(&img.s3_key_base);
+                                                                     // let dashboard_key = storage::thumbnail_key(&img.s3_key_base);
         let def_filename = "image".to_string();
         let filename = img.filename.as_ref().unwrap_or(&def_filename);
         let url = resolve_image_url(state, &dashboard_key, &img.content_type, &filename).await;
