@@ -167,9 +167,12 @@ impl R2Client {
     fn build_thumbnail_webp(data: &[u8]) -> Result<Vec<u8>> {
         let image =
             image::load_from_memory(data).context("Failed to decode image for thumbnail")?;
-        let thumbnail = image.thumbnail(Self::THUMBNAIL_MAX_DIMENSION, u32::MAX);
-        let encoder =
-            webp::Encoder::from_image(&thumbnail).context("Failed to encode thumbnail as WebP")?;
+        let thumbnail = image
+            .thumbnail(Self::THUMBNAIL_MAX_DIMENSION, u32::MAX)
+            .to_rgba8();
+        let thumbnail_image = image::DynamicImage::ImageRgba8(thumbnail);
+        let encoder = webp::Encoder::from_image(&thumbnail_image)
+            .map_err(|error| anyhow::anyhow!("Failed to create WebP encoder: {error}"))?;
         Ok(encoder.encode(Self::WEBP_QUALITY).to_vec())
     }
 }
