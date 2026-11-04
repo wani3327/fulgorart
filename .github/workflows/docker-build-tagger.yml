@@ -5,9 +5,13 @@ on:
     branches:
       - main
     paths:
-      - './crates/tagger/**'
-      - './crates/tagger_s3/**'
-      - './crates/storage/**'
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/tagger/**"
+      - "crates/tagger_s3/**"
+      - "crates/tagger_s3/Dockerfile"
+      - "crates/storage/**"
+      - ".github/workflows/docker-build-tagger.yml"
   workflow_dispatch:
 
 jobs:
