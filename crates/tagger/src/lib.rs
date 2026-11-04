@@ -8,11 +8,13 @@ use ort::{
     value::Tensor,
 };
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 /// Category IDs used in the WD14 `selected_tags.csv`.
 const CAT_CHARACTER: i32 = 4;
 const WD14_INPUT_SIZE: u32 = 448;
+
+static ORT_ENVIRONMENT: OnceLock<Result<ort::environment::Environment, String>> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TagPrediction {
@@ -74,7 +76,18 @@ impl Wd14Tagger {
     ) -> Result<Self> {
         tracing::info!(model_path, labels_path, "Loading WD14 ONNX model");
 
-        let session = Session::builder()
+        let environment = ORT_ENVIRONMENT
+            .get_or_init(|| {
+                ort::init()
+                    .with_telemetry(false)
+                    .build()
+                    .map_err(|e| e.to_string())
+            })
+            .as_ref()
+            .map_err(|error| anyhow::anyhow!("Failed to create ONNX environment: {error}"))?
+            .clone();
+
+        let session = Session::builder(&environment)
             .map_err(|e| anyhow::anyhow!("Failed to create ONNX session builder: {e}"))?
             .with_optimization_level(GraphOptimizationLevel::Level3)
             .map_err(|e| anyhow::anyhow!("Failed to set optimization level: {e}"))?
