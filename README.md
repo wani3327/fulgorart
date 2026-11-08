@@ -32,8 +32,26 @@ FULGORART_R2_SECRET_ACCESS_KEY=...
 ```env
 PIXIV_ACCESS_TOKEN=...
 PIXIV_USER_ID=...                # optional; auto-resolved when omitted
-TWITTER_BEARER_TOKEN=...
+
+# X (Twitter): OAuth 2.0 app from the X developer portal (user authentication on,
+# type "Native App" or "Web App", callback URL = FULGORART_X_REDIRECT_URI)
+FULGORART_X_CLIENT_ID=...
+FULGORART_X_CLIENT_SECRET=...    # only for confidential (Web App) clients
+FULGORART_X_REDIRECT_URI=http://127.0.0.1:8765/callback   # default
+FULGORART_X_TOKEN_PATH=...       # default: x-token.json next to FULGORART_DB_PATH
 ```
+
+### Ingest liked posts (`cli ingestor <service>`)
+
+```bash
+cli ingestor x login             # once: open the URL, approve, paste the redirected URL back
+cli ingestor x --dry-run         # list what would be imported
+cli ingestor x                   # import new likes (stops at already-imported ones)
+cli ingestor x --max-pages 0 --full   # first full backfill / fill gaps (X bills per post read)
+```
+
+In Docker: `docker compose run --rm cli ingestor x login`. Images go to R2 with
+thumbnails and get queued for tagging, like `gallery-dl` imports.
 
 ### CLI tagger-tool
 

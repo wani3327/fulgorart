@@ -223,7 +223,7 @@ where
     x.into_iter().map(|y| (y.clone().post(), y.item()))
 }
 
-fn image_metadata(data: &[u8]) -> (String, Option<i64>, Option<i64>) {
+pub(crate) fn image_metadata(data: &[u8]) -> (String, Option<i64>, Option<i64>) {
     let mut hasher = sha2::Sha256::new();
     hasher.update(data);
     let sha256 = hex::encode(hasher.finalize());

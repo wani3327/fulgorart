@@ -4,7 +4,7 @@ use bytes::Bytes;
 use serde::Deserialize;
 use tokio::process::Command;
 
-use crate::{SourceAdapter, SourcePost};
+use crate::{LikedPage, SourceAdapter};
 
 pub struct PixivAdapter {
     access_token: String,
@@ -229,9 +229,10 @@ impl SourceAdapter for PixivAdapter {
         "pixiv"
     }
 
-    async fn fetch_liked_posts(&self, since: Option<&str>) -> Result<Vec<SourcePost>> {
+    /// pixivpy3 returns every bookmark at once, so this is always a single page.
+    async fn fetch_liked_page(&self, _cursor: Option<&str>) -> Result<LikedPage> {
         let posts = self.fetch_with_pixivpy3().await?;
-        let since_ts = Self::parse_since(since);
+        let since_ts = Self::parse_since(None);
 
         let mut result = Vec::with_capacity(posts.len());
         for post in posts {
@@ -257,7 +258,10 @@ impl SourceAdapter for PixivAdapter {
             // });
         }
 
-        Ok(result)
+        Ok(LikedPage {
+            posts: result,
+            next_cursor: None,
+        })
     }
 
     async fn download_image(&self, url: &str) -> Result<(Bytes, String)> {

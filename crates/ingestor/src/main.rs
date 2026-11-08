@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::path::PathBuf;
 
-use fulgorart_ingestor::{grab, save_grabbed_posts, PixivAdapter, TwitterAdapter};
+use fulgorart_ingestor::{grab, save_grabbed_posts, x::XAppConfig, PixivAdapter, XAdapter};
 
 fn output_dir_from_args(default_output_dir: &str) -> PathBuf {
     let mut args = std::env::args().skip(1);
@@ -33,10 +33,10 @@ async fn main() -> Result<()> {
         std::env::var("PIXIV_ACCESS_TOKEN")?.as_str(),
         std::env::var("PIXIV_USER_ID").ok(),
     );
-    let twitter = TwitterAdapter::new(std::env::var("TWITTER_BEARER_TOKEN")?.as_str());
+    let x = XAdapter::new(XAppConfig::from_env(PathBuf::from("./data/x-token.json"))?)?;
 
     posts.extend(grab(&pixiv).await?);
-    posts.extend(grab(&twitter).await?);
+    posts.extend(grab(&x).await?);
 
     let saved = save_grabbed_posts(&output_dir, &posts).await?;
 

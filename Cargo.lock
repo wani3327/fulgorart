@@ -1454,12 +1454,14 @@ name = "fulgorart-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "bytes",
  "chrono",
  "clap",
  "csv",
  "dotenvy",
  "fulgorart-db",
+ "fulgorart-ingestor",
  "fulgorart-storage",
  "fulgorart-tagger",
  "google-cloud-logging-v2",
@@ -1503,15 +1505,19 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "bytes",
  "chrono",
  "dotenvy",
+ "getrandom 0.2.17",
  "reqwest 0.13.5",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "url",
 ]
 
 [[package]]

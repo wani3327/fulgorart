@@ -1,8 +1,8 @@
 mod adapters;
 mod model;
 
-pub use adapters::{PixivAdapter, SourceAdapter, TwitterAdapter};
-pub use model::{GrabbedImage, GrabbedPost, SourcePost};
+pub use adapters::{x, PixivAdapter, SourceAdapter, XAdapter};
+pub use model::{GrabbedImage, GrabbedPost, LikedPage, SourcePost};
 
 use anyhow::Result;
 use std::path::Path;
@@ -12,7 +12,17 @@ use std::path::Path;
 pub async fn grab<T: SourceAdapter + ?Sized>(adapter: &T) -> Result<Vec<GrabbedPost>> {
     let mut grabbed_posts = Vec::new();
 
-    let posts = adapter.fetch_liked_posts(None).await?;
+    let mut posts = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = adapter.fetch_liked_page(cursor.as_deref()).await?;
+        posts.extend(page.posts);
+        match page.next_cursor {
+            Some(next) => cursor = Some(next),
+            None => break,
+        }
+    }
+
     for post in posts {
         let mut images = Vec::new();
         for image_url in &post.image_urls {
@@ -30,6 +40,8 @@ pub async fn grab<T: SourceAdapter + ?Sized>(adapter: &T) -> Result<Vec<GrabbedP
                 source_post_id: post.source_post_id,
                 source_post_url: post.source_post_url,
                 liked_at: post.liked_at,
+                posted_at: post.posted_at,
+                caption: post.caption,
                 author_name: post.author_name,
                 author_source_id: post.author_source_id,
                 author_url: post.author_url,

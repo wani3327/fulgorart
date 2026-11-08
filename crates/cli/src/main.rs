@@ -23,7 +23,7 @@ enum Commands {
     TaggerTool(tagger_tool::Args),
     /// Import gallery-dl Pixiv JSON and downloaded files into the DB
     GalleryDl(gallery_dl_tool::Args),
-    /// Placeholder wrapper for future fulgorart-ingestor orchestration
+    /// Import images from posts you liked on a service (e.g. `ingestor x`)
     Ingestor(ingestor::Args),
     /// Process uploaded tag jobs on the Cloud Run tagger job
     RemoteTagger(remote_tagger_tool::Args),
@@ -66,7 +66,7 @@ async fn main() -> Result<()> {
             let r2 = connect_r2().await?;
             gallery_dl_tool::run(args, &db, &r2).await?;
         }
-        Commands::Ingestor(args) => ingestor::run(args)?,
+        Commands::Ingestor(args) => ingestor::run(args).await?,
         Commands::RemoteTagger(args) => {
             let db = connect_db().await?;
             let job = remote_tagger_tool::CloudRunJob::from_env()?;

@@ -12,6 +12,10 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 async-trait = { workspace = true }
-reqwest = { version = "0.13", features = ["json", "stream"] }
+reqwest = { version = "0.13", features = ["json", "stream", "form", "query"] }
 bytes = "1"
 chrono = { workspace = true }
+sha2 = "0.10"
+base64 = "0.22"
+getrandom = "0.2"
+url = "2"
