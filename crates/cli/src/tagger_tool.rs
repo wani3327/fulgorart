@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use clap::Args as ClapArgs;
 use fulgorart_db::{Db, TagJobWithKey};
 use fulgorart_storage::R2Client;
-use fulgorart_tagger::Wd14Tagger;
+use fulgorart_tagger::{TagPrediction, Wd14Tagger};
 
 #[derive(Debug, Clone, ClapArgs)]
 pub struct Args {
@@ -20,7 +20,7 @@ struct Wd14Label {
 }
 
 #[derive(Debug, Clone)]
-struct Wd14LabelIndex {
+pub(crate) struct Wd14LabelIndex {
     by_tag_id: HashMap<i64, Wd14Label>,
 }
 
@@ -32,7 +32,7 @@ struct Wd14CsvRow {
 }
 
 impl Wd14LabelIndex {
-    fn from_env() -> Result<Self> {
+    pub(crate) fn from_env() -> Result<Self> {
         let labels_path = std::env::var("WD14_LABELS_PATH")
             .unwrap_or_else(|_| "./models/selected_tags.csv".to_string());
         let mut reader = csv::Reader::from_path(&labels_path)
@@ -69,15 +69,16 @@ fn wd14_category_name(category_id: i32) -> &'static str {
     }
 }
 
-async fn apply_job_tags(
+/// `image_tag.source` recorded for WD14 predictions, local or remote.
+pub(crate) const WD14_TAG_SOURCE: &str = "wd14";
+
+/// Store WD14 predictions for an image, mapping WD14 label ids to DB tags.
+pub(crate) async fn save_predictions(
     db: &Db,
     labels: &Wd14LabelIndex,
-    tagger: &Wd14Tagger,
-    job: &TagJobWithKey,
-    bytes: &[u8],
+    image_id: i64,
+    predictions: Vec<TagPrediction>,
 ) -> Result<()> {
-    let predictions = tagger.tag(bytes)?;
-
     for prediction in predictions {
         let label = labels
             .get(prediction.tag_id)
@@ -86,15 +87,26 @@ async fn apply_job_tags(
             .get_or_create_tag(&label.name, Some(&label.category))
             .await?;
         db.insert_image_tag(
-            job.image_id,
+            image_id,
             tag_row.id,
-            "wd14",
+            WD14_TAG_SOURCE,
             Some(prediction.score as f64),
         )
         .await?;
     }
 
     Ok(())
+}
+
+async fn apply_job_tags(
+    db: &Db,
+    labels: &Wd14LabelIndex,
+    tagger: &Wd14Tagger,
+    job: &TagJobWithKey,
+    bytes: &[u8],
+) -> Result<()> {
+    let predictions = tagger.tag(bytes)?;
+    save_predictions(db, labels, job.image_id, predictions).await
 }
 
 pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {

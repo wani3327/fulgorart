@@ -25,8 +25,8 @@ enum Commands {
     GalleryDl(gallery_dl_tool::Args),
     /// Placeholder wrapper for future fulgorart-ingestor orchestration
     Ingestor(ingestor::Args),
-    /// Placeholder wrapper for future Cloud Run tagging orchestration
-    RemoteTagger,
+    /// Process uploaded tag jobs on the Cloud Run tagger job
+    RemoteTagger(remote_tagger_tool::Args),
 }
 
 async fn connect_db() -> Result<Db> {
@@ -67,10 +67,10 @@ async fn main() -> Result<()> {
             gallery_dl_tool::run(args, &db, &r2).await?;
         }
         Commands::Ingestor(args) => ingestor::run(args)?,
-        Commands::RemoteTagger => {
+        Commands::RemoteTagger(args) => {
             let db = connect_db().await?;
             let job = remote_tagger_tool::CloudRunJob::from_env()?;
-            remote_tagger_tool::run(db, &job).await?
+            remote_tagger_tool::run(args, &db, &job).await?
         }
     }
 

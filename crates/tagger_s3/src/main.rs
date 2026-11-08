@@ -3,10 +3,14 @@ use fulgorart_storage::{R2Client, R2Config};
 use fulgorart_tagger::{TagPrediction, Wd14Tagger};
 use serde::Serialize;
 
+/// One line per input image: `tags` on success, `error` when that image failed.
 #[derive(Serialize)]
 struct TagResult {
     key: String,
-    tags: Vec<TagPrediction>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tags: Option<Vec<TagPrediction>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
 fn print_usage() {
@@ -117,22 +121,36 @@ async fn main() -> Result<()> {
     let r2_config = r2_config_from_env()?;
     let r2 = R2Client::new(&r2_config).await?;
 
-    let mut results = Vec::with_capacity(keys.len());
+    // Log each result as soon as it is ready, and keep going when one image
+    // fails, so a single bad image doesn't lose the rest of the batch.
+    let (mut processed, mut failed) = (0usize, 0usize);
     for raw_key in keys {
         let key = raw_key.strip_prefix("r2://").unwrap_or(raw_key.as_str());
         tracing::debug!(%key, bucket = r2.bucket(), "Fetching image from R2");
-        let bytes = r2.download(key).await?;
-        let tags = tagger.tag(&bytes)?;
-        results.push(TagResult {
-            key: key.to_string(),
-            tags,
-        });
+        let outcome = async {
+            let bytes = r2.download(key).await?;
+            tagger.tag(&bytes)
+        }
+        .await;
+        let result = match outcome {
+            Ok(tags) => TagResult {
+                key: key.to_string(),
+                tags: Some(tags),
+                error: None,
+            },
+            Err(error) => {
+                failed += 1;
+                TagResult {
+                    key: key.to_string(),
+                    tags: None,
+                    error: Some(format!("{error:#}")),
+                }
+            }
+        };
+        log_tag_result(&result)?;
+        processed += 1;
     }
 
-    let processed = results.len();
-    for result in &results {
-        log_tag_result(result)?;
-    }
-    tracing::info!(processed, "Tagger processed file(s)");
+    tracing::info!(processed, failed, "Tagger processed file(s)");
     Ok(())
 }
