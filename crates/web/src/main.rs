@@ -64,13 +64,22 @@ async fn resolve_image_url(
     content_type: &str,
     filename: &str,
 ) -> String {
-    // checking cache
-    if let Some(c) = state.presigned_urls.read().await.get(s3_key) {
-        if Instant::now() <= c.expires_at {
-            return c.url.clone();
+    // checking cache. The read guard must be dropped before taking the write
+    // lock below, otherwise this task waits on itself forever. Keep the lookup
+    // in its own statement so the guard ends at the semicolon.
+    let cached = state
+        .presigned_urls
+        .read()
+        .await
+        .get(s3_key)
+        .map(|c| (c.url.clone(), c.expires_at));
+
+    if let Some((url, expires_at)) = cached {
+        if Instant::now() <= expires_at {
+            return url;
         }
 
-        // drop outdated; handle race condition
+        // drop outdated; another task may have refreshed it meanwhile
         let mut map = state.presigned_urls.write().await;
         if let Some(c) = map.get(s3_key) {
             if Instant::now() > c.expires_at {
@@ -266,4 +275,51 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn test_state() -> AppState {
+        let db_path = std::env::temp_dir().join(format!("fulgorart-web-test-{}.db", std::process::id()));
+        let storage = R2Client::new(&R2Config {
+            bucket: "bucket".into(),
+            endpoint: "https://example.invalid".into(),
+            access_key_id: "id".into(),
+            secret_access_key: "secret".into(),
+        })
+        .await
+        .unwrap();
+        AppState {
+            db: Db::connect(&db_path).await.unwrap(),
+            storage,
+            config: WebConfig { password: None, port: 0 },
+            presigned_urls: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    // Regression: an expired cache entry used to deadlock (read guard held while taking the write lock).
+    #[tokio::test]
+    async fn expired_cache_entry_is_refreshed_without_deadlock() {
+        let state = test_state().await;
+        state.presigned_urls.write().await.insert(
+            "key".into(),
+            CachedPresignedUrl {
+                url: "stale".into(),
+                expires_at: Instant::now() - Duration::from_secs(1),
+            },
+        );
+
+        let url = tokio::time::timeout(
+            Duration::from_secs(5),
+            resolve_image_url(&state, "key", "image/webp", "image"),
+        )
+        .await
+        .expect("resolve_image_url deadlocked on an expired cache entry");
+
+        assert_ne!(url, "stale");
+        let cached = state.presigned_urls.read().await;
+        assert_eq!(cached.get("key").map(|c| c.url.as_str()), Some(url.as_str()));
+    }
 }
