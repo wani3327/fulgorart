@@ -79,7 +79,7 @@ pub(crate) async fn save_predictions(
     image_id: i64,
     predictions: Vec<TagPrediction>,
 ) -> Result<()> {
-    for prediction in predictions {
+    for prediction in keep_top_rating(predictions) {
         let label = labels
             .get(prediction.tag_id)
             .ok_or_else(|| anyhow::anyhow!("Unknown WD14 tag id {}", prediction.tag_id))?;
@@ -96,6 +96,23 @@ pub(crate) async fn save_predictions(
     }
 
     Ok(())
+}
+
+/// WD14 category id for the rating labels (general/sensitive/questionable/explicit).
+const WD14_RATING_CATEGORY: i32 = 9;
+
+/// The tagger scores every rating label; an image has exactly one rating, so
+/// keep only the highest-scoring one and drop the rest.
+fn keep_top_rating(predictions: Vec<TagPrediction>) -> Vec<TagPrediction> {
+    let top_rating = predictions
+        .iter()
+        .filter(|p| p.category_id == WD14_RATING_CATEGORY)
+        .max_by(|a, b| a.score.total_cmp(&b.score))
+        .map(|p| p.tag_id);
+    predictions
+        .into_iter()
+        .filter(|p| p.category_id != WD14_RATING_CATEGORY || Some(p.tag_id) == top_rating)
+        .collect()
 }
 
 async fn apply_job_tags(
@@ -163,4 +180,37 @@ pub async fn run(args: Args, db: &Db, r2: &R2Client) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn prediction(tag_id: i64, category_id: i32, score: f32) -> TagPrediction {
+        TagPrediction {
+            tag_id,
+            category_id,
+            score,
+        }
+    }
+
+    #[test]
+    fn keeps_only_the_top_rating() {
+        let kept = keep_top_rating(vec![
+            prediction(9_000, 9, 0.02),  // general
+            prediction(9_001, 9, 0.96),  // sensitive
+            prediction(9_002, 9, 0.03),  // questionable
+            prediction(9_003, 9, 0.001), // explicit
+            prediction(1, 0, 0.99),
+            prediction(2, 4, 0.80),
+        ]);
+        let ids: Vec<i64> = kept.iter().map(|p| p.tag_id).collect();
+        assert_eq!(ids, [9_001, 1, 2]);
+    }
+
+    #[test]
+    fn no_ratings_leaves_predictions_alone() {
+        let kept = keep_top_rating(vec![prediction(1, 0, 0.5), prediction(2, 4, 0.9)]);
+        assert_eq!(kept.len(), 2);
+    }
 }
