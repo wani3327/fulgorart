@@ -98,9 +98,12 @@ impl CloudRunJob {
         }
     }
 
-    /// Run the job for these images and wait for it to finish; returns the execution id.
-    async fn trigger(&self, jobs: &[TagJobWithKey]) -> Result<String> {
-        use google_cloud_lro::Poller;
+    /// Start the job for these images; returns the execution's full resource name.
+    ///
+    /// Doesn't wait on the returned operation: reading it needs the
+    /// project-wide `run.operations.get`. The execution is read instead
+    /// (`wait_for_execution`), which `run.developer` on the job allows.
+    async fn start(&self, jobs: &[TagJobWithKey]) -> Result<String> {
         use google_cloud_run_v2::{
             client::Jobs,
             model::run_job_request::{overrides::ContainerOverride, Overrides},
@@ -121,23 +124,101 @@ impl CloudRunJob {
             .set_container_overrides([co])
             .set_task_count(1);
 
-        let execution = client
+        let operation = client
             .run_job()
             .set_name(name)
             .set_overrides(overrides)
-            .poller()
-            .until_done()
+            .send()
             .await
-            .context("Cloud Run job execution failed")?;
-
-        execution
-            .name
-            .rsplit('/')
-            .next()
-            .filter(|id| !id.is_empty())
-            .map(str::to_owned)
-            .context("Cloud Run returned an execution without a name")
+            .context("Failed to start the Cloud Run job")?;
+        execution_from_operation(&operation).map(|execution| execution.name)
     }
+
+    /// Poll the execution until Cloud Run marks it complete.
+    /// `Ok(None)` = succeeded, `Ok(Some(reason))` = finished but failed.
+    async fn wait_for_execution(&self, execution_name: &str) -> Result<Option<String>> {
+        let client = google_cloud_run_v2::client::Executions::builder()
+            .build()
+            .await?;
+        let deadline = Instant::now() + MAX_EXECUTION_WAIT;
+
+        loop {
+            let execution = client
+                .get_execution()
+                .set_name(execution_name)
+                .send()
+                .await
+                .with_context(|| format!("Failed to read execution {execution_name}"))?;
+            if let Some(outcome) = execution_outcome(&execution) {
+                return Ok(outcome.err());
+            }
+            if Instant::now() >= deadline {
+                anyhow::bail!(
+                    "execution still running after {}s",
+                    MAX_EXECUTION_WAIT.as_secs()
+                );
+            }
+            tokio::time::sleep(EXECUTION_POLL_INTERVAL).await;
+        }
+    }
+}
+
+/// How often to check whether an execution has finished.
+const EXECUTION_POLL_INTERVAL: Duration = Duration::from_secs(15);
+/// Give up waiting on one execution after this long.
+const MAX_EXECUTION_WAIT: Duration = Duration::from_secs(2 * 60 * 60);
+
+/// The execution a `run_job` operation started; Cloud Run puts it in the metadata.
+fn execution_from_operation(
+    operation: &google_cloud_longrunning::model::Operation,
+) -> Result<google_cloud_run_v2::model::Execution> {
+    use google_cloud_longrunning::model::operation::Result as OpResult;
+
+    if let Some(OpResult::Error(status)) = &operation.result {
+        anyhow::bail!("Cloud Run refused to run the job: {}", status.message);
+    }
+    let execution: google_cloud_run_v2::model::Execution = operation
+        .metadata
+        .as_ref()
+        .context("run_job returned no execution metadata")?
+        .to_msg()
+        .context("run_job metadata was not an Execution")?;
+    if execution.name.is_empty() {
+        anyhow::bail!("run_job returned an execution without a name");
+    }
+    Ok(execution)
+}
+
+/// `None` while running; `Some(Ok)` when all tasks succeeded; `Some(Err(reason))` otherwise.
+fn execution_outcome(
+    execution: &google_cloud_run_v2::model::Execution,
+) -> Option<std::result::Result<(), String>> {
+    execution.completion_time.as_ref()?;
+    if execution.failed_count == 0
+        && execution.cancelled_count == 0
+        && execution.succeeded_count >= execution.task_count.max(1)
+    {
+        return Some(Ok(()));
+    }
+    let details: Vec<&str> = execution
+        .conditions
+        .iter()
+        .map(|c| c.message.as_str())
+        .filter(|m| !m.is_empty())
+        .collect();
+    Some(Err(format!(
+        "execution failed (succeeded={} failed={} cancelled={}){}{}",
+        execution.succeeded_count,
+        execution.failed_count,
+        execution.cancelled_count,
+        if details.is_empty() { "" } else { ": " },
+        details.join("; ")
+    )))
+}
+
+/// Short execution id (last path segment), as used in log labels.
+fn execution_id(execution_name: &str) -> &str {
+    execution_name.rsplit('/').next().unwrap_or(execution_name)
 }
 
 /// Find the job a logged key belongs to. tagger-s3 logs the R2 key it read
@@ -209,10 +290,10 @@ async fn run_batch(
         db.update_tag_job_status(job.job_id, "running", None).await?;
     }
 
-    let execution = match cloud_run.trigger(jobs).await {
-        Ok(execution) => execution,
+    let execution_name = match cloud_run.start(jobs).await {
+        Ok(name) => name,
         Err(error) => {
-            // Don't leave the batch stuck in "running".
+            // Nothing ran; don't leave the batch stuck in "running".
             let message = format!("{error:#}");
             for job in jobs {
                 db.update_tag_job_status(job.job_id, "failed", Some(&message))
@@ -221,7 +302,18 @@ async fn run_batch(
             return Err(error);
         }
     };
+    let execution = execution_id(&execution_name).to_owned();
     println!("execution={execution} jobs={}", jobs.len());
+
+    // Even if the execution failed partway, results it logged before that are
+    // still collected; only images without a result are marked failed.
+    let execution_failure = match cloud_run.wait_for_execution(&execution_name).await {
+        Ok(failure) => failure,
+        Err(error) => Some(format!("{error:#}")),
+    };
+    if let Some(reason) = &execution_failure {
+        eprintln!("execution={execution} {reason}");
+    }
 
     let mut results = collect_results(cloud_run, &execution, jobs, log_wait).await?;
 
@@ -235,7 +327,11 @@ async fn run_batch(
             }
             Some(_) => Err(anyhow::anyhow!("tagger result had neither tags nor error")),
             None => Err(anyhow::anyhow!(
-                "no result in Cloud Run logs for execution {execution}"
+                "no result in Cloud Run logs for execution {execution}{}",
+                execution_failure
+                    .as_deref()
+                    .map(|reason| format!(" ({reason})"))
+                    .unwrap_or_default()
             )),
         };
 
@@ -286,6 +382,42 @@ pub async fn run(args: Args, db: &Db, cloud_run: &CloudRunJob) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use google_cloud_run_v2::model::{Condition, Execution};
+
+    const EXEC: &str = "projects/p/locations/us-west1/jobs/j/executions/j-abc12";
+
+    fn finished(succeeded: i32, failed: i32) -> Execution {
+        Execution::new()
+            .set_name(EXEC)
+            .set_task_count(1)
+            .set_succeeded_count(succeeded)
+            .set_failed_count(failed)
+            .set_completion_time(google_cloud_wkt::Timestamp::clamp(1_800_000_000, 0))
+    }
+
+    #[test]
+    fn reads_execution_from_run_job_operation() {
+        let operation = google_cloud_longrunning::model::Operation::new()
+            .set_name("projects/p/locations/us-west1/operations/op1")
+            .set_metadata(google_cloud_wkt::Any::from_msg(&Execution::new().set_name(EXEC)).unwrap());
+        assert_eq!(execution_from_operation(&operation).unwrap().name, EXEC);
+        assert_eq!(execution_id(EXEC), "j-abc12");
+
+        let no_metadata = google_cloud_longrunning::model::Operation::new();
+        assert!(execution_from_operation(&no_metadata).is_err());
+    }
+
+    #[test]
+    fn execution_outcome_states() {
+        // still running: no completion time yet
+        assert!(execution_outcome(&Execution::new().set_task_count(1)).is_none());
+        assert_eq!(execution_outcome(&finished(1, 0)), Some(Ok(())));
+
+        let failed = finished(0, 1).set_conditions([Condition::new().set_message("Task timed out")]);
+        let reason = execution_outcome(&failed).unwrap().unwrap_err();
+        assert!(reason.contains("failed=1"), "{reason}");
+        assert!(reason.contains("Task timed out"), "{reason}");
+    }
 
     fn job(job_id: i64, s3_key_base: &str) -> TagJobWithKey {
         TagJobWithKey {
