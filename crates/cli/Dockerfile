@@ -75,7 +75,6 @@ FROM debian:bookworm-slim AS runtime
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
-        jq \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -90,13 +89,9 @@ COPY --from=builder \
     /app/target/release/fulgorart-cli \
     /usr/local/bin/fulgorart-cli
 
-# gallery-dl helper
-COPY crates/cli/utils/import_using_gallery_dl.sh \
-    /usr/local/bin/import_using_gallery_dl
 
 ENV ORT_DYLIB_PATH=/app/lib/libonnxruntime.so \
     WD14_MODEL_PATH=/app/wd-swinv2.onnx \
     WD14_LABELS_PATH=/app/selected_tags.csv
 
-RUN ln -s /usr/local/bin/fulgorart-cli /usr/local/bin/cli \
-    && ln -s /usr/local/bin/import_using_gallery_dl /usr/local/bin/iugd
+RUN ln -s /usr/local/bin/fulgorart-cli /usr/local/bin/cli

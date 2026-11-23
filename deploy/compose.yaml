@@ -1,0 +1,38 @@
+# Reference compose file for a fulgorart host (hoshiyomi runs this from
+# ~/fulgorart). `docker compose up -d` starts only the web UI; `cli` and `gdl`
+# are one-off tools (profile "tools"), run with `docker compose run --rm ...`.
+services:
+  web:
+    image: jibago/fulgorart-web
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:3000:3000" # reached through `tailscale serve`, not the internet
+    volumes:
+      - data:/data
+
+  # docker compose run --rm cli <subcommand> ...
+  cli:
+    image: jibago/fulgorart-cli
+    entrypoint: cli
+    profiles: ["tools"]
+    env_file:
+      - .env
+    volumes:
+      - data:/data
+      - ./gdl/staging:/staging # gallery-dl downloads, imported by `cli gallery-dl`
+
+  # docker compose run --rm gdl <gallery-dl args> ...
+  gdl:
+    image: jibago/fulgorart-gdl
+    profiles: ["tools"]
+    user: "${UID:-1000}:${GID:-1000}"
+    volumes:
+      - ${HOME}/.config/gallery-dl:/config/gallery-dl:ro # tokens/cookies; never baked into the image
+      - ./gdl/cache:/cache # gallery-dl's refreshed tokens
+      - ./gdl/state:/state # download archives (what's already been downloaded)
+      - ./gdl/staging:/staging # downloads waiting to be imported
+
+volumes:
+  data:
