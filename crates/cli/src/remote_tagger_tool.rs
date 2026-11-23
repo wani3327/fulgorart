@@ -143,13 +143,24 @@ impl CloudRunJob {
             .await?;
         let deadline = Instant::now() + MAX_EXECUTION_WAIT;
 
+        let mut errors = 0;
         loop {
-            let execution = client
-                .get_execution()
-                .set_name(execution_name)
-                .send()
-                .await
-                .with_context(|| format!("Failed to read execution {execution_name}"))?;
+            let execution = match client.get_execution().set_name(execution_name).send().await {
+                Ok(execution) => {
+                    errors = 0;
+                    execution
+                }
+                Err(error) if errors + 1 < MAX_CONSECUTIVE_API_ERRORS => {
+                    errors += 1;
+                    eprintln!("reading execution failed ({errors}), retrying: {error}");
+                    tokio::time::sleep(API_ERROR_RETRY_DELAY).await;
+                    continue;
+                }
+                Err(error) => {
+                    return Err(anyhow::Error::new(error)
+                        .context(format!("Failed to read execution {execution_name}")))
+                }
+            };
             if let Some(outcome) = execution_outcome(&execution) {
                 return Ok(outcome);
             }
@@ -163,6 +174,11 @@ impl CloudRunJob {
         }
     }
 }
+
+/// Google APIs occasionally fail transiently (e.g. INTERNAL); tolerate this
+/// many failures in a row when polling before giving up.
+const MAX_CONSECUTIVE_API_ERRORS: u32 = 5;
+const API_ERROR_RETRY_DELAY: Duration = Duration::from_secs(20);
 
 /// How often to check whether an execution has finished.
 const EXECUTION_POLL_INTERVAL: Duration = Duration::from_secs(15);
@@ -289,8 +305,22 @@ async fn collect_results(
     let deadline = Instant::now() + wait;
     let mut results = HashMap::new();
 
+    let mut errors = 0;
     loop {
-        for entry in cloud_run.retrieve_log(&client, execution).await? {
+        let entries = match cloud_run.retrieve_log(&client, execution).await {
+            Ok(entries) => {
+                errors = 0;
+                entries
+            }
+            Err(error) if errors + 1 < MAX_CONSECUTIVE_API_ERRORS => {
+                errors += 1;
+                eprintln!("execution={execution} reading logs failed ({errors}), retrying: {error:#}");
+                tokio::time::sleep(API_ERROR_RETRY_DELAY).await;
+                continue;
+            }
+            Err(error) => return Err(error.context("Failed to read Cloud Run logs")),
+        };
+        for entry in entries {
             let Some(message) = entry
                 .json_payload()
                 .and_then(|p| p.get("message"))
@@ -370,10 +400,24 @@ async fn run_batch(
         eprintln!("execution={execution} {reason}");
     }
 
+    let mut collect_error = None;
     let mut results = if ran {
-        collect_results(cloud_run, &execution, jobs, log_wait).await?
+        match collect_results(cloud_run, &execution, jobs, log_wait).await {
+            Ok(results) => results,
+            Err(error) => {
+                // Don't abort and leave the batch stuck in "running": fail the
+                // images with the reason below so they can be requeued.
+                eprintln!("execution={execution} {error:#}");
+                collect_error = Some(format!("{error:#}"));
+                HashMap::new()
+            }
+        }
     } else {
         HashMap::new() // never started: there are no logs to wait for
+    };
+    let execution_failure = match (execution_failure, collect_error) {
+        (Some(a), Some(b)) => Some(format!("{a}; {b}")),
+        (a, b) => a.or(b),
     };
 
     for job in jobs {
