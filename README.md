@@ -142,11 +142,56 @@ cargo run --bin fulgorart-cli -- upload-tool \
 # Process pending tag jobs with local WD14
 cargo run --bin fulgorart-cli -- tagger-tool --batch-size 20
 
-# Placeholder wrappers for future shell composition
-cargo run --bin fulgorart-cli -- gallery-dl -- --help
-cargo run --bin fulgorart-cli -- ingestor -- --help
-cargo run --bin fulgorart-cli -- remote-tagger -- --help
+# Import files downloaded by gallery-dl (metadata from --write-metadata sidecars)
+cargo run --bin fulgorart-cli -- gallery-dl --remove-imported ./staging
+
+# Tag pending jobs on the Cloud Run tagger job
+cargo run --bin fulgorart-cli -- remote-tagger --max-batches 1
 ```
+
+## Pixiv bookmarks pipeline (gallery-dl)
+
+```
+gallery-dl (fulgorart-gdl) ──▶ gdl/staging: x.png + x.png.json ──▶ cli gallery-dl ──▶ R2 + DB ──▶ cli remote-tagger
+```
+
+`deploy/ingest-pixiv.sh` runs the three steps with the services in
+`deploy/compose.yaml`:
+
+1. **download**: the `gdl` service (image `fulgorart-gdl`, `deploy/gdl/`) runs
+   gallery-dl with `--download-archive gdl/state/pixiv.arc -A 20
+   --write-metadata`. Bookmarks come newest first and `-A 20` stops after 20
+   already-downloaded files in a row, so a routine run only looks at the newest
+   few bookmarks. Each file gets a metadata sidecar, `x.png.json`.
+2. **import**: `cli gallery-dl --remove-imported /staging` stores each file via
+   the shared import path (also used by `cli ingestor x`): rejects files that
+   don't decode (e.g. truncated downloads), dedups by sha256, uploads original +
+   thumbnail to R2, queues a tag job. Stored and duplicate files are removed
+   from staging; anything left there needs attention. If an upload fails, the
+   image's DB row is released, so the next run retries it.
+3. **tag**: `cli remote-tagger`.
+
+The metadata reader only needs `category` and `id`; everything else is optional
+and unknown fields are ignored, so gallery-dl updates don't break imports.
+Pixiv is mapped exactly; other gallery-dl sites get a best-effort mapping.
+`cli gallery-dl <dir> <dump.json>` still accepts a `gallery-dl -J` dump.
+
+### Setup on a host
+
+```bash
+# next to compose.yaml (copy deploy/compose.yaml and deploy/ingest-pixiv.sh there)
+mkdir -p gdl/state gdl/staging gdl/cache
+# reuse an existing archive so already-downloaded bookmarks aren't fetched again
+cp ~/gdl-archives/pixiv.arc gdl/state/pixiv.arc
+echo 'PIXIV_BOOKMARKS_URL=https://www.pixiv.net/users/<id>/bookmarks/artworks' > ingest.env
+docker compose pull
+./ingest-pixiv.sh
+```
+
+The gallery-dl config (site tokens/cookies) is mounted read-only from
+`~/.config/gallery-dl` into the `gdl` container only and is never baked into
+the image. gallery-dl's version is pinned in `deploy/gdl/Dockerfile`; bump it
+there to update (the image rebuilds on push to `main`).
 
 ## REST API
 

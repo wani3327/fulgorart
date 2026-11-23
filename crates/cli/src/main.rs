@@ -4,6 +4,7 @@ use fulgorart_db::{Db, DbConfig};
 use fulgorart_storage::{R2Client, R2Config};
 
 mod gallery_dl_tool;
+mod import;
 mod ingestor;
 mod remote_tagger_tool;
 mod tagger_tool;

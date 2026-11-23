@@ -575,6 +575,23 @@ impl Db {
         Ok(Some(ClaimedImageUpload { asset, job }))
     }
 
+    /// Undo `claim_image_asset_upload_with_filename` after the upload failed:
+    /// remove the image and its tag job so the next import claims it again.
+    /// Without this a failed upload left a row whose sha256 made every later
+    /// import skip the image as a duplicate, so it was never uploaded.
+    pub async fn release_image_asset_claim(&self, image_id: i64) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        for sql in [
+            "DELETE FROM tag_job WHERE image_id = ?",
+            "DELETE FROM image_tag WHERE image_id = ?",
+            "DELETE FROM image_asset WHERE id = ?",
+        ] {
+            sqlx::query(sql).bind(image_id).execute(&mut *tx).await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn list_image_assets(&self, page: i64, per_page: i64) -> Result<Vec<ImageAssetRow>> {
         let offset = (page - 1) * per_page;
         let rows = sqlx::query_as::<_, ImageAssetRow>(
@@ -988,6 +1005,26 @@ mod tests {
         let ids = |rows: Vec<ImageAssetRow>| rows.into_iter().map(|r| r.id).collect::<Vec<_>>();
         assert_eq!(ids(db.list_post_images(a, &[], &[]).await.unwrap()), [a0, a1, _a2]);
         assert_eq!(ids(db.list_post_images(a, &["1girl".into()], &[]).await.unwrap()), [a0, a1]);
+    }
+
+    #[tokio::test]
+    async fn released_claim_can_be_claimed_again() {
+        let db = temp_db("release").await;
+        let claim = |db: &Db| {
+            let db = db.clone();
+            async move {
+                db.claim_image_asset_upload_with_filename(None, "sha-x", "k/x", None, None, None, None, "image/png", None)
+                    .await
+                    .unwrap()
+            }
+        };
+        let first = claim(&db).await.expect("first claim");
+        assert!(claim(&db).await.is_none(), "same sha256 is a duplicate while claimed");
+
+        db.release_image_asset_claim(first.asset.id).await.unwrap();
+        assert!(db.get_image_asset_by_id(first.asset.id).await.unwrap().is_none());
+        assert!(db.get_pending_tag_jobs(10).await.unwrap().is_empty());
+        assert!(claim(&db).await.is_some(), "released image can be claimed again");
     }
 
     #[tokio::test]

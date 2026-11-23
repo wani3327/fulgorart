@@ -9,16 +9,14 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Args as ClapArgs, Subcommand};
-use fulgorart_db::{
-    Db, DbConfig, GalleryImportAuthorArgs, GalleryImportImageArgs, GalleryImportPostArgs,
-};
+use fulgorart_db::{Db, DbConfig};
 use fulgorart_ingestor::{
     x::{self as x_api, XAppConfig},
     SourceAdapter, SourcePost, XAdapter,
 };
 use fulgorart_storage::R2Client;
 
-use crate::gallery_dl_tool::image_metadata;
+use crate::import::{self, ImportAuthor, ImportImage, ImportOutcome, ImportPost};
 
 #[derive(Debug, Clone, ClapArgs)]
 pub struct Args {
@@ -188,8 +186,18 @@ pub async fn ingest(
             };
             for (index, url) in post.image_urls.iter().enumerate() {
                 match import_image(adapter, db, r2, post, index, url).await {
-                    Ok(ImageOutcome::Uploaded) => summary.uploaded += 1,
-                    Ok(ImageOutcome::Duplicate) => summary.duplicates += 1,
+                    Ok(ImportOutcome::Uploaded { image_id, key }) => {
+                        summary.uploaded += 1;
+                        println!("uploaded post={} image_id={image_id} key={key}", post.source_post_url);
+                    }
+                    Ok(ImportOutcome::Duplicate { sha256 }) => {
+                        summary.duplicates += 1;
+                        println!("skipped_duplicate post={} sha256={sha256}", post.source_post_url);
+                    }
+                    Ok(ImportOutcome::Rejected(reason)) => {
+                        summary.failed += 1;
+                        eprintln!("image_rejected post={} url={url} reason={reason}", post.source_post_url);
+                    }
                     Err(error) => {
                         summary.failed += 1;
                         eprintln!("image_failed post={} url={url} error={error:#}", post.source_post_url);
@@ -211,11 +219,7 @@ pub async fn ingest(
     Ok(summary)
 }
 
-enum ImageOutcome {
-    Uploaded,
-    Duplicate,
-}
-
+/// Download one image of `post` and store it through the shared import path.
 async fn import_image(
     adapter: &dyn SourceAdapter,
     db: &Db,
@@ -223,79 +227,44 @@ async fn import_image(
     post: &SourcePost,
     index: usize,
     url: &str,
-) -> Result<ImageOutcome> {
-    let (bytes, content_type) = adapter
+) -> Result<ImportOutcome> {
+    let (bytes, _content_type) = adapter
         .download_image(url)
         .await
         .with_context(|| format!("download {url}"))?;
-    let data = bytes.to_vec();
-    let (sha256, width, height) = image_metadata(&data);
-    let source_type = adapter.source_type();
-    let filename = format!("{}_p{index}", post.source_post_id);
-    let s3_key_base = R2Client::canonical_key_base(source_type, &filename);
-
-    let author = post
-        .author_source_id
-        .as_deref()
-        .map(|id| GalleryImportAuthorArgs {
-            source_author_id: id,
-            name: post.author_name.as_deref(),
-            url: post.author_url.as_deref(),
+    let import_post = ImportPost {
+        source_type: adapter.source_type().to_owned(),
+        source_post_id: post.source_post_id.clone(),
+        source_post_url: post.source_post_url.clone(),
+        posted_at: post.posted_at.clone(),
+        title: None,
+        caption: post.caption.clone(),
+        raw_json: post.raw_json.clone(),
+        author: post.author_source_id.as_ref().map(|id| ImportAuthor {
+            source_author_id: id.clone(),
+            name: post.author_name.clone(),
+            url: post.author_url.clone(),
             profile_url: None,
-        });
-    let claimed = db
-        .claim_gallery_image_upload(
-            &GalleryImportPostArgs {
-                source_type,
-                source_post_id: &post.source_post_id,
-                source_post_url: &post.source_post_url,
-                uploaded_at: post.posted_at.as_deref(),
-                title: None,
-                caption: post.caption.as_deref(),
-                raw_json: post.raw_json.as_deref(),
-            },
-            author.as_ref(),
-            &GalleryImportImageArgs {
-                sha256: &sha256,
-                s3_key_base: &s3_key_base,
-                filename: Some(&filename),
-                width,
-                height,
-                file_size: Some(data.len() as i64),
-                content_type: &content_type,
-                source_url: Some(url),
-            },
-        )
-        .await?;
-
-    let Some(claimed) = claimed.claimed_upload else {
-        println!("skipped_duplicate post={} sha256={sha256}", post.source_post_url);
-        return Ok(ImageOutcome::Duplicate);
+        }),
     };
-
-    match r2.upload_with_thumbnail(&s3_key_base, data, &content_type).await {
-        Ok(()) => {
-            db.update_tag_job_status(claimed.job.id, "uploaded", None)
-                .await?;
-            println!(
-                "uploaded post={} image_id={} key={s3_key_base}",
-                post.source_post_url, claimed.asset.id
-            );
-            Ok(ImageOutcome::Uploaded)
-        }
-        Err(error) => {
-            let message = format!("{error:#}");
-            db.update_tag_job_status(claimed.job.id, "failed", Some(&message))
-                .await?;
-            Err(error.context(format!("upload to {s3_key_base}")))
-        }
-    }
+    import::import_image(
+        db,
+        r2,
+        &import_post,
+        ImportImage {
+            data: bytes.to_vec(),
+            filename: format!("{}_p{index}", post.source_post_id),
+            source_url: Some(url.to_owned()),
+        },
+    )
+    .await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use async_trait::async_trait;
+    use fulgorart_db::GalleryImportPostArgs;
     use bytes::Bytes;
     use fulgorart_ingestor::LikedPage;
     use std::sync::atomic::{AtomicU32, Ordering};
