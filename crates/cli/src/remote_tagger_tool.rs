@@ -134,9 +134,8 @@ impl CloudRunJob {
         execution_from_operation(&operation).map(|execution| execution.name)
     }
 
-    /// Poll the execution until Cloud Run marks it complete.
-    /// `Ok(None)` = succeeded, `Ok(Some(reason))` = finished but failed.
-    async fn wait_for_execution(&self, execution_name: &str) -> Result<Option<String>> {
+    /// Poll the execution until Cloud Run marks it complete (or failed).
+    async fn wait_for_execution(&self, execution_name: &str) -> Result<ExecutionOutcome> {
         let client = google_cloud_run_v2::client::Executions::builder()
             .build()
             .await?;
@@ -150,7 +149,7 @@ impl CloudRunJob {
                 .await
                 .with_context(|| format!("Failed to read execution {execution_name}"))?;
             if let Some(outcome) = execution_outcome(&execution) {
-                return Ok(outcome.err());
+                return Ok(outcome);
             }
             if Instant::now() >= deadline {
                 anyhow::bail!(
@@ -167,6 +166,25 @@ impl CloudRunJob {
 const EXECUTION_POLL_INTERVAL: Duration = Duration::from_secs(15);
 /// Give up waiting on one execution after this long.
 const MAX_EXECUTION_WAIT: Duration = Duration::from_secs(2 * 60 * 60);
+/// Waits before re-running a batch whose execution never started (e.g. the
+/// image pull from Docker Hub failed or was rate limited); one retry per entry.
+const NOT_STARTED_RETRY_DELAYS: [Duration; 4] = [
+    Duration::from_secs(2 * 60),
+    Duration::from_secs(5 * 60),
+    Duration::from_secs(10 * 60),
+    Duration::from_secs(20 * 60),
+];
+
+/// How an execution ended.
+#[derive(Debug, PartialEq)]
+enum ExecutionOutcome {
+    Succeeded,
+    /// Ran but didn't fully succeed; results it logged may still exist.
+    Failed(String),
+    /// Failed before any task started (no start time), so nothing was tagged
+    /// and the same batch can simply be retried.
+    NotStarted(String),
+}
 
 /// The execution a `run_job` operation started; Cloud Run puts it in the metadata.
 fn execution_from_operation(
@@ -189,31 +207,52 @@ fn execution_from_operation(
     Ok(execution)
 }
 
-/// `None` while running; `Some(Ok)` when all tasks succeeded; `Some(Err(reason))` otherwise.
-fn execution_outcome(
-    execution: &google_cloud_run_v2::model::Execution,
-) -> Option<std::result::Result<(), String>> {
-    execution.completion_time.as_ref()?;
-    if execution.failed_count == 0
+/// `None` while the execution is still going.
+///
+/// Finished means a completion time is set, or Cloud Run marked the
+/// `Completed` condition failed. The latter matters: an execution whose
+/// container image couldn't be pulled is failed but never gets a start or
+/// completion time.
+fn execution_outcome(execution: &google_cloud_run_v2::model::Execution) -> Option<ExecutionOutcome> {
+    use google_cloud_run_v2::model::condition::State;
+
+    let completed_failed = execution
+        .conditions
+        .iter()
+        .any(|c| c.r#type == "Completed" && c.state == State::ConditionFailed);
+    if execution.completion_time.is_none() && !completed_failed {
+        return None;
+    }
+    if !completed_failed
+        && execution.failed_count == 0
         && execution.cancelled_count == 0
         && execution.succeeded_count >= execution.task_count.max(1)
     {
-        return Some(Ok(()));
+        return Some(ExecutionOutcome::Succeeded);
     }
-    let details: Vec<&str> = execution
+
+    let details: Vec<String> = execution
         .conditions
         .iter()
-        .map(|c| c.message.as_str())
-        .filter(|m| !m.is_empty())
+        .filter(|c| c.state == State::ConditionFailed)
+        .map(|c| {
+            let reason = c.reasons.as_ref().map(|r| format!("{r:?}")).unwrap_or_default();
+            format!("{} {reason} {}", c.r#type, c.message).trim().to_owned()
+        })
         .collect();
-    Some(Err(format!(
+    let summary = format!(
         "execution failed (succeeded={} failed={} cancelled={}){}{}",
         execution.succeeded_count,
         execution.failed_count,
         execution.cancelled_count,
         if details.is_empty() { "" } else { ": " },
-        details.join("; ")
-    )))
+        details.first().map(String::as_str).unwrap_or_default()
+    );
+    Some(if execution.start_time.is_none() {
+        ExecutionOutcome::NotStarted(summary)
+    } else {
+        ExecutionOutcome::Failed(summary)
+    })
 }
 
 /// Short execution id (last path segment), as used in log labels.
@@ -290,32 +329,50 @@ async fn run_batch(
         db.update_tag_job_status(job.job_id, "running", None).await?;
     }
 
-    let execution_name = match cloud_run.start(jobs).await {
-        Ok(name) => name,
-        Err(error) => {
-            // Nothing ran; don't leave the batch stuck in "running".
-            let message = format!("{error:#}");
-            for job in jobs {
-                db.update_tag_job_status(job.job_id, "failed", Some(&message))
-                    .await?;
+    let mut retry_delays = NOT_STARTED_RETRY_DELAYS.iter();
+    let (execution, execution_failure, ran) = loop {
+        let execution_name = match cloud_run.start(jobs).await {
+            Ok(name) => name,
+            Err(error) => {
+                // Nothing ran; don't leave the batch stuck in "running".
+                let message = format!("{error:#}");
+                for job in jobs {
+                    db.update_tag_job_status(job.job_id, "failed", Some(&message))
+                        .await?;
+                }
+                return Err(error);
             }
-            return Err(error);
-        }
-    };
-    let execution = execution_id(&execution_name).to_owned();
-    println!("execution={execution} jobs={}", jobs.len());
+        };
+        let execution = execution_id(&execution_name).to_owned();
+        println!("execution={execution} jobs={}", jobs.len());
 
-    // Even if the execution failed partway, results it logged before that are
-    // still collected; only images without a result are marked failed.
-    let execution_failure = match cloud_run.wait_for_execution(&execution_name).await {
-        Ok(failure) => failure,
-        Err(error) => Some(format!("{error:#}")),
+        match cloud_run.wait_for_execution(&execution_name).await {
+            Ok(ExecutionOutcome::Succeeded) => break (execution, None, true),
+            Ok(ExecutionOutcome::NotStarted(reason)) => match retry_delays.next() {
+                Some(delay) => {
+                    eprintln!(
+                        "execution={execution} never started, retrying batch in {}s: {reason}",
+                        delay.as_secs()
+                    );
+                    tokio::time::sleep(*delay).await;
+                }
+                None => break (execution, Some(reason), false),
+            },
+            // Even if the execution failed partway, results it logged before
+            // that are still collected; only images without one are failed.
+            Ok(ExecutionOutcome::Failed(reason)) => break (execution, Some(reason), true),
+            Err(error) => break (execution, Some(format!("{error:#}")), true),
+        }
     };
     if let Some(reason) = &execution_failure {
         eprintln!("execution={execution} {reason}");
     }
 
-    let mut results = collect_results(cloud_run, &execution, jobs, log_wait).await?;
+    let mut results = if ran {
+        collect_results(cloud_run, &execution, jobs, log_wait).await?
+    } else {
+        HashMap::new() // never started: there are no logs to wait for
+    };
 
     for job in jobs {
         let outcome = match results.remove(&job.job_id) {
@@ -407,16 +464,54 @@ mod tests {
         assert!(execution_from_operation(&no_metadata).is_err());
     }
 
+    fn completed_failed(reason_message: &str) -> Condition {
+        use google_cloud_run_v2::model::condition::State;
+        Condition::new()
+            .set_type("Completed")
+            .set_state(State::ConditionFailed)
+            .set_message(reason_message)
+    }
+
     #[test]
     fn execution_outcome_states() {
-        // still running: no completion time yet
-        assert!(execution_outcome(&Execution::new().set_task_count(1)).is_none());
-        assert_eq!(execution_outcome(&finished(1, 0)), Some(Ok(())));
+        use google_cloud_run_v2::model::condition::State;
 
-        let failed = finished(0, 1).set_conditions([Condition::new().set_message("Task timed out")]);
-        let reason = execution_outcome(&failed).unwrap().unwrap_err();
-        assert!(reason.contains("failed=1"), "{reason}");
-        assert!(reason.contains("Task timed out"), "{reason}");
+        // still running: no completion time, Completed condition not failed
+        assert!(execution_outcome(&Execution::new().set_task_count(1)).is_none());
+        let running = Execution::new()
+            .set_task_count(1)
+            .set_start_time(google_cloud_wkt::Timestamp::clamp(1_800_000_000, 0))
+            .set_conditions([Condition::new().set_type("Completed").set_state(State::ConditionReconciling)]);
+        assert!(execution_outcome(&running).is_none());
+
+        assert_eq!(execution_outcome(&finished(1, 0)), Some(ExecutionOutcome::Succeeded));
+
+        let failed = finished(0, 1)
+            .set_start_time(google_cloud_wkt::Timestamp::clamp(1_800_000_000, 0))
+            .set_conditions([completed_failed("Task timed out")]);
+        match execution_outcome(&failed) {
+            Some(ExecutionOutcome::Failed(reason)) => {
+                assert!(reason.contains("failed=1"), "{reason}");
+                assert!(reason.contains("Task timed out"), "{reason}");
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    // Regression: image import failure leaves no start/completion time; this
+    // used to look "still running" until the 2h wait ran out.
+    #[test]
+    fn image_pull_failure_is_not_started() {
+        let pull_failed = Execution::new()
+            .set_name(EXEC)
+            .set_task_count(1)
+            .set_conditions([completed_failed("Container import failed: ")]);
+        match execution_outcome(&pull_failed) {
+            Some(ExecutionOutcome::NotStarted(reason)) => {
+                assert!(reason.contains("Container import failed"), "{reason}");
+            }
+            other => panic!("expected NotStarted, got {other:?}"),
+        }
     }
 
     fn job(job_id: i64, s3_key_base: &str) -> TagJobWithKey {
