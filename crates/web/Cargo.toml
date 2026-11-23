@@ -8,7 +8,7 @@ name = "fulgorart-web"
 path = "src/main.rs"
 
 [dependencies]
-minijinja = "2"
+minijinja = { version = "2", features = ["urlencode"] }
 fulgorart-db = { path = "../db" }
 fulgorart-storage = { path = "../storage" }
 axum = { version = "0.7", features = ["macros"] }

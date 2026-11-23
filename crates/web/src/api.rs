@@ -3,7 +3,7 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use fulgorart_db::{ImageAssetRow, TagRow};
+use fulgorart_db::{ImageAssetRow, TagRow, TagSuggestion};
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
@@ -120,5 +120,28 @@ pub async fn list_tags(
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     };
+    Ok(Json(tags))
+}
+
+#[derive(Deserialize)]
+pub struct SuggestQuery {
+    q: Option<String>,
+    limit: Option<i64>,
+}
+
+/// Autocomplete for the gallery search: tags matching `q`, most used first.
+pub async fn suggest_tags(
+    State(state): State<AppState>,
+    Query(q): Query<SuggestQuery>,
+) -> Result<Json<Vec<TagSuggestion>>, StatusCode> {
+    let query = q.q.as_deref().unwrap_or("").trim();
+    if query.is_empty() {
+        return Ok(Json(Vec::new()));
+    }
+    let limit = q.limit.unwrap_or(8).clamp(1, 30);
+    let tags = state.db.suggest_tags(query, limit).await.map_err(|error| {
+        tracing::error!(?error, "Failed to suggest tags");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     Ok(Json(tags))
 }

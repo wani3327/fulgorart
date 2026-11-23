@@ -44,6 +44,33 @@ fn thumbnail_size(width: Option<i64>, height: Option<i64>) -> (Option<i64>, Opti
 pub(crate) struct IndexPageQuery {
     page: Option<i64>,
     per_page: Option<i64>,
+    /// Tag search, see `parse_tag_query`.
+    q: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+pub(crate) struct GalleryQuery {
+    q: Option<String>,
+}
+
+/// Most tags one search may use (each included tag is a join).
+const MAX_SEARCH_TAGS: usize = 12;
+
+/// Booru-style tag search: space-separated tags must all be present;
+/// `-tag` excludes images that have it. Duplicates are dropped.
+fn parse_tag_query(query: &str) -> (Vec<String>, Vec<String>) {
+    let (mut include, mut exclude) = (Vec::<String>::new(), Vec::<String>::new());
+    for token in query.split_whitespace().take(MAX_SEARCH_TAGS) {
+        let (list, tag) = match token.strip_prefix('-') {
+            Some(tag) if !tag.is_empty() => (&mut exclude, tag),
+            Some(_) => continue, // a lone "-"
+            None => (&mut include, token),
+        };
+        if !list.iter().any(|t| t == tag) {
+            list.push(tag.to_owned());
+        }
+    }
+    (include, exclude)
 }
 
 /// fetch images from DB for index
@@ -51,13 +78,18 @@ async fn images_for_index(
     state: &AppState,
     page: i64,
     per_page: i64,
+    query: &str,
 ) -> Result<(Vec<ImageCardView>, bool), StatusCode> {
     let fetch_limit = per_page.saturating_add(1);
+    let (include, exclude) = parse_tag_query(query);
     let images = state
         .db
-        .list_image_assets(page, fetch_limit)
+        .list_image_assets_by_tags(&include, &exclude, page, fetch_limit)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|error| {
+            tracing::error!(?error, "Failed to list images");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
     let has_more = images.len() as i64 > per_page;
     let mut rendered_images = Vec::with_capacity(images.len().min(per_page as usize));
@@ -81,8 +113,12 @@ async fn images_for_index(
     Ok((rendered_images, has_more))
 }
 
-pub(crate) async fn get_index(State(state): State<AppState>) -> Result<Html<String>, StatusCode> {
-    let (rendered_images, has_more) = images_for_index(&state, 1, INDEX_PAGE_SIZE).await?;
+pub(crate) async fn get_index(
+    State(state): State<AppState>,
+    Query(gallery): Query<GalleryQuery>,
+) -> Result<Html<String>, StatusCode> {
+    let query = gallery.q.as_deref().unwrap_or("").trim().to_owned();
+    let (rendered_images, has_more) = images_for_index(&state, 1, INDEX_PAGE_SIZE, &query).await?;
     let count = rendered_images.len();
     // first row or two load right away; the rest lazily as you scroll
     let cards_html = render_template(
@@ -104,6 +140,7 @@ pub(crate) async fn get_index(State(state): State<AppState>) -> Result<Html<Stri
                 has_more,
                 next_page => 2,
                 per_page => INDEX_PAGE_SIZE,
+                q => query,
             },
         )
         .await
@@ -120,7 +157,8 @@ pub(crate) async fn get_index_cards(
 ) -> Result<Response, StatusCode> {
     let page = q.page.unwrap_or(1);
     let per_page = q.per_page.unwrap_or(INDEX_PAGE_SIZE).clamp(1, 120);
-    let (images, has_more) = images_for_index(&state, page, per_page).await?;
+    let query = q.q.as_deref().unwrap_or("").trim();
+    let (images, has_more) = images_for_index(&state, page, per_page, query).await?;
     let body = render_template("index_cards.html", context!(images => images, eager_count => 0))
         .await
         .map_err(|error| {
@@ -139,6 +177,30 @@ pub(crate) async fn get_index_cards(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tags(v: &[&str]) -> Vec<String> {
+        v.iter().map(|t| t.to_string()).collect()
+    }
+
+    #[test]
+    fn parses_include_and_exclude_tags() {
+        assert_eq!(
+            parse_tag_query("  1girl pink_hair  -explicit "),
+            (tags(&["1girl", "pink_hair"]), tags(&["explicit"]))
+        );
+        assert_eq!(parse_tag_query(""), (vec![], vec![]));
+        // a lone "-" is ignored, duplicates dropped, names kept verbatim
+        assert_eq!(
+            parse_tag_query("- 1girl 1girl -x -x :o"),
+            (tags(&["1girl", ":o"]), tags(&["x"]))
+        );
+    }
+
+    #[test]
+    fn caps_number_of_search_tags() {
+        let many = (0..30).map(|i| format!("t{i}")).collect::<Vec<_>>().join(" ");
+        assert_eq!(parse_tag_query(&many).0.len(), MAX_SEARCH_TAGS);
+    }
 
     #[test]
     fn thumbnail_size_scales_to_thumbnail_width() {

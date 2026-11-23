@@ -6,12 +6,24 @@
 <link rel="stylesheet" href="/style.css"/>
 <title>FulgorArt</title>
 </head>
-<body data-next-page="{{ next_page }}" data-per-page="{{ per_page }}" data-has-more="{{ has_more }}">
+<body data-next-page="{{ next_page }}" data-per-page="{{ per_page }}" data-has-more="{{ has_more }}" data-query="{{ q }}">
 <main class="app-shell">
 <header class="app-header">
-  <h1 class="app-title">FulgorArt</h1>
+  <h1 class="app-title"><a href="/">FulgorArt</a></h1>
   <p class="app-subtitle"><span id="gallery-count">{{ count }}</span> images loaded</p>
 </header>
+<form class="search" action="/" method="get" role="search" autocomplete="off">
+  <div class="search-field">
+    <input id="search-input" name="q" value="{{ q }}" type="search"
+           placeholder="Tags, e.g. 1girl pink_hair -explicit"
+           autocapitalize="none" autocorrect="off" spellcheck="false" enterkeyhint="search"
+           role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="search-suggestions"/>
+    <ul id="search-suggestions" class="search-suggestions" role="listbox" hidden></ul>
+  </div>
+  <button type="submit">Search</button>
+  {% if q %}<a class="search-clear" href="/">Clear</a>{% endif %}
+</form>
+{% if count == 0 %}<p class="gallery-empty">{% if q %}No images match <strong>{{ q }}</strong>.{% else %}No images yet.{% endif %}</p>{% endif %}
 <div class="masonry-gallery" id="masonry-gallery">
   <div class="masonry-column" id="masonry-column-left"></div>
   <div class="masonry-column" id="masonry-column-right"></div>
@@ -26,7 +38,7 @@
   const stream = document.getElementById('card-stream');
   const count = document.getElementById('gallery-count');
   const sentinel = document.getElementById('gallery-sentinel');
-  const { nextPage: nextPageValue, perPage: perPageValue, hasMore: hasMoreValue } = document.body.dataset;
+  const { nextPage: nextPageValue, perPage: perPageValue, hasMore: hasMoreValue, query } = document.body.dataset;
   let nextPage = Number(nextPageValue);
   const perPage = Number(perPageValue);
   let loading = false;
@@ -72,7 +84,7 @@
     loading = true;
 
     try {
-      const response = await fetch(`/api/index/cards?page=${nextPage}&per_page=${perPage}`);
+      const response = await fetch(`/api/index/cards?page=${nextPage}&per_page=${perPage}&q=${encodeURIComponent(query || '')}`);
       if (!response.ok) {
         return;
       }
@@ -96,6 +108,103 @@
   if (!hasMore) {
     observer.disconnect();
   }
+})();
+</script>
+<script>
+// Tag autocomplete for the search box: suggests completions for the tag
+// under the cursor (a leading "-" is kept for excludes).
+(() => {
+  const input = document.getElementById('search-input');
+  const list = document.getElementById('search-suggestions');
+  let items = [];
+  let active = -1;
+  let timer = null;
+  let requestSeq = 0;
+
+  function currentToken() {
+    const caret = input.selectionStart ?? input.value.length;
+    const start = input.value.lastIndexOf(' ', caret - 1) + 1;
+    let end = input.value.indexOf(' ', caret);
+    if (end === -1) end = input.value.length;
+    return { start, end, text: input.value.slice(start, end) };
+  }
+
+  function hide() {
+    list.hidden = true;
+    input.setAttribute('aria-expanded', 'false');
+    items = [];
+    active = -1;
+  }
+
+  function render() {
+    list.replaceChildren(...items.map((tag, i) => {
+      const li = document.createElement('li');
+      li.role = 'option';
+      li.className = i === active ? 'active' : '';
+      li.setAttribute('aria-selected', String(i === active));
+      const name = document.createElement('span');
+      name.textContent = tag.name;
+      const count = document.createElement('span');
+      count.className = 'count';
+      count.textContent = tag.image_count;
+      li.append(name, count);
+      li.addEventListener('pointerdown', (event) => {
+        event.preventDefault(); // keep focus in the input
+        accept(i);
+      });
+      return li;
+    }));
+    list.hidden = items.length === 0;
+    input.setAttribute('aria-expanded', String(!list.hidden));
+  }
+
+  function accept(i) {
+    const { start, end, text } = currentToken();
+    const prefix = text.startsWith('-') ? '-' : '';
+    const before = input.value.slice(0, start);
+    const after = input.value.slice(end).replace(/^\s*/, '');
+    const insert = `${prefix}${items[i].name} `;
+    input.value = before + insert + after;
+    const caret = (before + insert).length;
+    input.setSelectionRange(caret, caret);
+    hide();
+    input.focus();
+  }
+
+  async function suggest() {
+    const word = currentToken().text.replace(/^-/, '');
+    if (!word) return hide();
+    const seq = ++requestSeq;
+    try {
+      const response = await fetch(`/api/tags/suggest?q=${encodeURIComponent(word)}&limit=8`);
+      if (!response.ok || seq !== requestSeq) return;
+      items = await response.json();
+      active = -1;
+      render();
+    } catch (_) {
+      hide();
+    }
+  }
+
+  input.addEventListener('input', () => {
+    clearTimeout(timer);
+    timer = setTimeout(suggest, 120);
+  });
+  input.addEventListener('keydown', (event) => {
+    if (list.hidden || items.length === 0) return;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const step = event.key === 'ArrowDown' ? 1 : -1;
+      active = (active + step + items.length) % items.length;
+      render();
+    } else if ((event.key === 'Enter' || event.key === 'Tab') && active >= 0) {
+      event.preventDefault(); // complete the tag instead of submitting
+      accept(active);
+    } else if (event.key === 'Escape') {
+      hide();
+    }
+  });
+  input.addEventListener('blur', () => setTimeout(hide, 100));
 })();
 </script>
 </main>

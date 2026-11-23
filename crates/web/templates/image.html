@@ -21,7 +21,7 @@
     <h2 class="section-title">Tags</h2>
     <div id="tags" class="tag-list">
   {% for tag in tags %}
-  <span class="tag" data-tag-id="{{ tag.id }}">{{ tag.name }} <button type="button" class="remove-tag" data-tag-id="{{ tag.id }}">×</button></span>
+  <span class="tag" data-tag-id="{{ tag.id }}"><a href="/?q={{ tag.name|urlencode }}">{{ tag.name }}</a> <button type="button" class="remove-tag" data-tag-id="{{ tag.id }}">×</button></span>
   {% endfor %}
     </div>
     <div class="controls controls-spaced">

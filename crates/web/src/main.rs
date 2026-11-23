@@ -266,6 +266,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/images/:id/tags", post(api::add_tag))
         .route("/api/images/:id/tags/:tag_id", delete(api::delete_tag))
         .route("/api/tags", get(api::list_tags))
+        .route("/api/tags/suggest", get(api::suggest_tags))
         .layer(middleware::from_fn_with_state(state.clone(), check_auth))
         .with_state(state);
 

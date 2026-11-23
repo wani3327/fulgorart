@@ -81,6 +81,27 @@ pub struct TagRow {
     pub created_at: String,
 }
 
+/// A tag suggestion for search autocomplete.
+#[derive(Debug, Clone, PartialEq, sqlx::FromRow, serde::Serialize)]
+pub struct TagSuggestion {
+    pub name: String,
+    pub category: Option<String>,
+    pub image_count: i64,
+}
+
+/// Escape `%`, `_` and `\` so user text matches literally in `LIKE ... ESCAPE '\'`
+/// (tag names are full of underscores).
+fn escape_like(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        if matches!(ch, '%' | '_' | '\\') {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
+}
+
 #[derive(Debug, Clone, sqlx::FromRow, serde::Serialize, serde::Deserialize)]
 pub struct ImageTagRow {
     pub id: i64,
@@ -617,6 +638,27 @@ impl Db {
         Ok(row)
     }
 
+    /// Tags matching `query` for search autocomplete: names starting with it
+    /// first, then names containing it, each by how many images use the tag.
+    /// Tags no image uses are left out.
+    pub async fn suggest_tags(&self, query: &str, limit: i64) -> Result<Vec<TagSuggestion>> {
+        let escaped = escape_like(query);
+        let rows = sqlx::query_as::<_, TagSuggestion>(
+            "SELECT t.name, t.category, COUNT(it.image_id) AS image_count
+             FROM tag t JOIN image_tag it ON it.tag_id = t.id
+             WHERE t.name LIKE ?1 ESCAPE '\\'
+             GROUP BY t.id
+             ORDER BY (t.name LIKE ?2 ESCAPE '\\') DESC, image_count DESC, t.name
+             LIMIT ?3",
+        )
+        .bind(format!("%{escaped}%"))
+        .bind(format!("{escaped}%"))
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
     pub async fn search_tags(&self, query: &str) -> Result<Vec<TagRow>> {
         let pattern = format!("%{}%", query);
         let rows = sqlx::query_as::<_, TagRow>(
@@ -772,5 +814,98 @@ impl Db {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn temp_db(name: &str) -> Db {
+        let path = std::env::temp_dir().join(format!(
+            "fulgorart-db-test-{name}-{}.db",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        Db::connect(&path).await.unwrap()
+    }
+
+    /// Images 1..=n, each with the given tags.
+    async fn seed(db: &Db, images: &[&[&str]]) -> Vec<i64> {
+        let mut ids = Vec::new();
+        for (i, tags) in images.iter().enumerate() {
+            // the path importers use (insert_image_asset's SQL is currently broken)
+            let asset = db
+                .claim_image_asset_upload_with_filename(
+                    None, &format!("sha{i}"), &format!("k/{i}"), None, None, None, None, "image/webp", None,
+                )
+                .await
+                .unwrap()
+                .expect("new sha256 is claimed")
+                .asset;
+            for tag in *tags {
+                let tag = db.get_or_create_tag(tag, Some("general")).await.unwrap();
+                db.insert_image_tag(asset.id, tag.id, "wd14", Some(0.9)).await.unwrap();
+            }
+            ids.push(asset.id);
+        }
+        ids
+    }
+
+    #[tokio::test]
+    async fn suggest_tags_prefix_first_then_by_use() {
+        let db = temp_db("suggest").await;
+        seed(
+            &db,
+            &[
+                &["pink_hair", "long_hair"],
+                &["pink_hair", "hair_ornament"],
+                &["long_hair"],
+                &["long_hair"],
+                &["pinkxhair"],
+            ],
+        )
+        .await;
+
+        let names = |s: Vec<TagSuggestion>| s.into_iter().map(|t| (t.name, t.image_count)).collect::<Vec<_>>();
+        // prefix match (hair_ornament) before more popular substring matches
+        assert_eq!(
+            names(db.suggest_tags("hair", 10).await.unwrap()),
+            [
+                ("hair_ornament".into(), 1),
+                ("long_hair".into(), 3),
+                ("pink_hair".into(), 2),
+                ("pinkxhair".into(), 1)
+            ]
+        );
+        // '_' is literal, so "pink_" doesn't match "pinkxhair"
+        assert_eq!(names(db.suggest_tags("pink_", 10).await.unwrap()), [("pink_hair".into(), 2)]);
+        assert_eq!(db.suggest_tags("long", 1).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn tag_search_includes_all_and_excludes_any() {
+        let db = temp_db("search").await;
+        let ids = seed(
+            &db,
+            &[&["1girl", "pink_hair"], &["1girl", "pink_hair", "explicit"], &["1girl"], &["pink_hair"]],
+        )
+        .await;
+        let found = |rows: Vec<ImageAssetRow>| {
+            let mut v: Vec<i64> = rows.into_iter().map(|r| r.id).collect();
+            v.sort();
+            v
+        };
+        let s = |v: &[&str]| v.iter().map(|t| t.to_string()).collect::<Vec<_>>();
+
+        let both = db.list_image_assets_by_tags(&s(&["1girl", "pink_hair"]), &[], 1, 50).await.unwrap();
+        assert_eq!(found(both), [ids[0], ids[1]]);
+        let not_explicit = db
+            .list_image_assets_by_tags(&s(&["1girl", "pink_hair"]), &s(&["explicit"]), 1, 50)
+            .await
+            .unwrap();
+        assert_eq!(found(not_explicit), [ids[0]]);
+        let only_exclude = db.list_image_assets_by_tags(&[], &s(&["pink_hair"]), 1, 50).await.unwrap();
+        assert_eq!(found(only_exclude), [ids[2]]);
     }
 }
