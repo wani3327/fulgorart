@@ -95,16 +95,14 @@ a:hover {
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 18px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02));
-  box-shadow: var(--shadow);
-  transform: translateY(0);
-  transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+  /* Kept cheap to paint: hundreds of cards are on the page while scrolling,
+     so no large blurred shadow, overlay or hover transform per card. */
+  background: var(--bg-surface);
+  transition: border-color 160ms ease;
 }
 
 .masonry-card:hover {
-  transform: translateY(-2px);
   border-color: rgba(125, 211, 252, 0.35);
-  box-shadow: 0 28px 64px rgba(0, 0, 0, 0.45);
 }
 
 .masonry-card a,
@@ -113,18 +111,11 @@ a:hover {
   width: 100%;
 }
 
+/* width/height attributes give the aspect ratio, so the card has its final
+   size (with this placeholder background) before the image arrives. */
 .masonry-card img {
   height: auto;
   background: var(--bg-surface);
-}
-
-.masonry-card::after {
-  content: "";
-  position: absolute;
-  inset: auto 0 0 0;
-  height: 34%;
-  background: linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.3));
-  pointer-events: none;
 }
 
 .gallery-sentinel {

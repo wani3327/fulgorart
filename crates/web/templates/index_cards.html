@@ -1,5 +1,5 @@
 {% for image in images %}
 <div class="masonry-card">
-  <a href="/image/{{ image.id }}"><img src="{{ image.url }}" loading="lazy" alt="image {{ image.id }}"/></a>
+  <a href="/image/{{ image.id }}"><img src="{{ image.url }}"{% if image.width and image.height %} width="{{ image.width }}" height="{{ image.height }}"{% endif %}{% if loop.index <= eager_count %} loading="eager" fetchpriority="high"{% else %} loading="lazy"{% endif %} decoding="async" alt="image {{ image.id }}"/></a>
 </div>
 {% endfor %}

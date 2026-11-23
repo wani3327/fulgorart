@@ -32,15 +32,31 @@
   let loading = false;
   let hasMore = hasMoreValue === 'True';
 
+  // Column heights in "column widths": each card adds its image's aspect
+  // ratio (height / width, from the <img> width/height attributes) plus a
+  // little for the gap. Known up front, so no layout reads per card.
+  const CARD_GAP = 0.04;
+  const columnHeights = [0, 0];
+  let cardCount = 0;
+
+  function cardRatio(card) {
+    const img = card.querySelector('img');
+    const w = Number(img && img.getAttribute('width'));
+    const h = Number(img && img.getAttribute('height'));
+    return w > 0 && h > 0 ? h / w : 1;
+  }
+
   function appendCards(container) {
-    while (container.firstElementChild) {
-      const card = container.firstElementChild;
-      const targetColumn = leftColumn.offsetHeight <= rightColumn.offsetHeight
-        ? leftColumn
-        : rightColumn;
-      targetColumn.appendChild(card);
+    const fragments = [document.createDocumentFragment(), document.createDocumentFragment()];
+    for (const card of Array.from(container.children)) {
+      const column = columnHeights[0] <= columnHeights[1] ? 0 : 1;
+      columnHeights[column] += cardRatio(card) + CARD_GAP;
+      fragments[column].appendChild(card);
+      cardCount += 1;
     }
-    count.textContent = String(gallery.querySelectorAll('.masonry-card').length);
+    leftColumn.appendChild(fragments[0]);
+    rightColumn.appendChild(fragments[1]);
+    count.textContent = String(cardCount);
   }
 
   appendCards(stream);

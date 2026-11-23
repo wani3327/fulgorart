@@ -148,7 +148,7 @@ impl R2Client {
             .key(key)
             .response_cache_control(format!("public, max-age={}", ttl.as_secs()))
             .response_content_type(content_type)
-            .response_content_disposition(format!(r#"attachment; filename={filename}""#))
+            .response_content_disposition(format!(r#"attachment; filename="{filename}""#))
             .presigned(presigning_config)
             .await
             .with_context(|| format!("Failed to presign object URL for key {key}"))?;
