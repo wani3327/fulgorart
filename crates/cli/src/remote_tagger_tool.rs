@@ -15,8 +15,10 @@ use crate::tagger_tool::{save_predictions, Wd14LabelIndex};
 
 #[derive(Debug, Clone, ClapArgs)]
 pub struct Args {
-    /// Number of pending jobs sent to one Cloud Run execution
-    #[arg(long, default_value_t = 50)]
+    /// Number of pending jobs sent to one Cloud Run execution. Each execution
+    /// pulls the tagger image once, so bigger batches mean fewer pulls; keep
+    /// one batch well inside the job's task timeout (~3.5s per image)
+    #[arg(long, default_value_t = 150)]
     pub batch_size: i64,
 
     /// How long to keep polling Cloud Logging for an execution's results
