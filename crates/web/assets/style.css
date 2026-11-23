@@ -304,3 +304,66 @@ button:hover {
 .tag a:hover {
   text-decoration: underline;
 }
+
+/* ---- folded posts ---- */
+.masonry-card.folded {
+  cursor: pointer;
+  /* a hint of the stack underneath */
+  outline: 1px solid var(--border);
+  outline-offset: 3px;
+}
+
+.fold-badge {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  min-width: 1.6rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(12, 15, 20, 0.78);
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+/* ---- image page: other images of the same post ---- */
+.muted {
+  color: var(--muted);
+  font-weight: normal;
+}
+
+.sibling-strip {
+  display: flex;
+  gap: 0.5rem;
+  overflow-x: auto;
+  padding-bottom: 0.25rem;
+  scroll-snap-type: x proximity;
+}
+
+.sibling {
+  flex: 0 0 auto;
+  scroll-snap-align: start;
+  border: 2px solid transparent;
+  border-radius: 10px;
+  overflow: hidden;
+  opacity: 0.75;
+}
+
+.sibling:hover,
+.sibling.current {
+  opacity: 1;
+}
+
+.sibling.current {
+  border-color: var(--accent-strong);
+}
+
+.sibling img {
+  display: block;
+  height: 96px;
+  width: auto;
+  background: var(--bg-surface);
+}

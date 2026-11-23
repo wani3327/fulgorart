@@ -1,11 +1,13 @@
 use axum::{
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::{header, HeaderValue, StatusCode},
     response::{Html, IntoResponse, Response},
 };
 use fulgorart_storage::{self as storage};
 use minijinja::context;
 use serde::{Deserialize, Serialize};
+
+use fulgorart_db::ImageAssetRow;
 
 use crate::{render_template, resolve_image_url, AppState};
 
@@ -14,7 +16,7 @@ const INDEX_PAGE_SIZE: i64 = 60;
 const EAGER_IMAGE_COUNT: usize = 4;
 
 #[derive(Clone, Debug, Serialize)]
-struct ImageCardView {
+pub(crate) struct ImageCardView {
     id: i64,
     url: String,
     /// Thumbnail size in px. Thumbnails keep the original's aspect ratio at
@@ -22,6 +24,10 @@ struct ImageCardView {
     /// before the image arrives. `None` when the original size is unknown.
     width: Option<i64>,
     height: Option<i64>,
+    post_id: Option<i64>,
+    /// Images folded into this card (same post, matching the search); >1 shows
+    /// a count badge and unfolds on click.
+    group_size: i64,
 }
 
 /// Width thumbnails are generated at (storage::R2Client::THUMBNAIL_MAX_DIMENSION).
@@ -74,43 +80,49 @@ fn parse_tag_query(query: &str) -> (Vec<String>, Vec<String>) {
 }
 
 /// fetch images from DB for index
+/// Card for one image (thumbnail URL + size), `group_size` images folded into it.
+pub(crate) async fn card_view(state: &AppState, img: &ImageAssetRow, group_size: i64) -> ImageCardView {
+    let thumbnail = storage::thumbnail_key(&img.s3_key_base);
+    let filename = img.filename.as_deref().unwrap_or("image");
+    // thumbnails are always stored as webp (see storage::upload_with_thumbnail)
+    let url = resolve_image_url(state, &thumbnail, "image/webp", filename).await;
+    let (width, height) = thumbnail_size(img.width, img.height);
+    ImageCardView {
+        id: img.id,
+        url,
+        width,
+        height,
+        post_id: img.post_id,
+        group_size,
+    }
+}
+
+/// One gallery page, folded by post (see `Db::list_image_groups`).
 async fn images_for_index(
     state: &AppState,
     page: i64,
     per_page: i64,
     query: &str,
 ) -> Result<(Vec<ImageCardView>, bool), StatusCode> {
+    // one extra row tells whether there's a next page
     let fetch_limit = per_page.saturating_add(1);
+    let offset = (page.max(1) - 1).saturating_mul(per_page);
     let (include, exclude) = parse_tag_query(query);
-    let images = state
+    let groups = state
         .db
-        .list_image_assets_by_tags(&include, &exclude, page, fetch_limit)
+        .list_image_groups(&include, &exclude, fetch_limit, offset)
         .await
         .map_err(|error| {
             tracing::error!(?error, "Failed to list images");
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
-    let has_more = images.len() as i64 > per_page;
-    let mut rendered_images = Vec::with_capacity(images.len().min(per_page as usize));
-
-    for img in images.into_iter().take(per_page as usize) {
-        let dashboard_key = storage::thumbnail_key(&img.s3_key_base);
-        let def_filename = "image".to_string();
-        let filename = img.filename.as_ref().unwrap_or(&def_filename);
-        // thumbnails are always stored as webp (see storage::upload_with_thumbnail)
-        let url = resolve_image_url(state, &dashboard_key, "image/webp", filename).await;
-
-        let (width, height) = thumbnail_size(img.width, img.height);
-        rendered_images.push(ImageCardView {
-            id: img.id,
-            url,
-            width,
-            height,
-        });
+    let has_more = groups.len() as i64 > per_page;
+    let mut cards = Vec::with_capacity(groups.len().min(per_page as usize));
+    for group in groups.into_iter().take(per_page as usize) {
+        cards.push(card_view(state, &group.asset, group.group_size).await);
     }
-
-    Ok((rendered_images, has_more))
+    Ok((cards, has_more))
 }
 
 pub(crate) async fn get_index(
@@ -172,6 +184,35 @@ pub(crate) async fn get_index_cards(
         HeaderValue::from_static(if has_more { "true" } else { "false" }),
     );
     Ok(response)
+}
+
+/// Cards for every image of a post that matches the search; the gallery
+/// swaps a folded card for these when it's clicked.
+pub(crate) async fn get_post_cards(
+    State(state): State<AppState>,
+    Path(post_id): Path<i64>,
+    Query(gallery): Query<GalleryQuery>,
+) -> Result<Html<String>, StatusCode> {
+    let (include, exclude) = parse_tag_query(gallery.q.as_deref().unwrap_or(""));
+    let images = state
+        .db
+        .list_post_images(post_id, &include, &exclude)
+        .await
+        .map_err(|error| {
+            tracing::error!(?error, post_id, "Failed to list post images");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    let mut cards = Vec::with_capacity(images.len());
+    for img in &images {
+        cards.push(card_view(&state, img, 1).await);
+    }
+    let body = render_template("index_cards.html", context!(images => cards, eager_count => 0))
+        .await
+        .map_err(|error| {
+            tracing::error!(?error, "Failed to render post cards");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+    Ok(Html(body))
 }
 
 #[cfg(test)]

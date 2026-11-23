@@ -17,6 +17,18 @@
   <section class="image-panel image-frame">
     <img src="{{ url }}" alt="image {{ id }}"/>
   </section>
+  {% if siblings %}
+  <section class="image-panel">
+    <h2 class="section-title">In this post <span class="muted">({{ siblings|length }})</span></h2>
+    <div class="sibling-strip">
+      {% for sib in siblings %}
+      <a href="/image/{{ sib.id }}" class="sibling{% if sib.id == id %} current{% endif %}"{% if sib.id == id %} aria-current="page"{% endif %}>
+        <img src="{{ sib.url }}"{% if sib.width and sib.height %} width="{{ sib.width }}" height="{{ sib.height }}"{% endif %} loading="lazy" decoding="async" alt="image {{ sib.id }}"/>
+      </a>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
   <section class="image-panel">
     <h2 class="section-title">Tags</h2>
     <div id="tags" class="tag-list">

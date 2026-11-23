@@ -81,6 +81,50 @@ pub struct TagRow {
     pub created_at: String,
 }
 
+/// One gallery entry when folding by post: the cover image plus group size.
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize)]
+pub struct ImageGroupRow {
+    #[sqlx(flatten)]
+    #[serde(flatten)]
+    pub asset: ImageAssetRow,
+    /// Images of this post that match the filter (1 = nothing to fold).
+    pub group_size: i64,
+}
+
+/// `SELECT ia.* FROM image_asset ia ...` restricted to images having every
+/// `include` tag and none of the `exclude` tags. Bind with `bind_tag_filter`.
+fn tag_filter_sql(include: &[String], exclude: &[String]) -> String {
+    let mut sql = String::from("SELECT DISTINCT ia.* FROM image_asset ia");
+    for i in 0..include.len() {
+        sql.push_str(&format!(
+            " JOIN image_tag it{i} ON ia.id = it{i}.image_id
+              JOIN tag t{i} ON it{i}.tag_id = t{i}.id AND t{i}.name = ?"
+        ));
+    }
+    if !exclude.is_empty() {
+        let placeholders = vec!["?"; exclude.len()].join(", ");
+        sql.push_str(&format!(
+            " WHERE ia.id NOT IN (
+                SELECT image_id FROM image_tag it_ex
+                JOIN tag t_ex ON it_ex.tag_id = t_ex.id
+                WHERE t_ex.name IN ({placeholders}))"
+        ));
+    }
+    sql
+}
+
+/// Bind the parameters of `tag_filter_sql`, in its order.
+fn bind_tag_filter<'q, O>(
+    mut query: sqlx::query::QueryAs<'q, sqlx::Sqlite, O, sqlx::sqlite::SqliteArguments<'q>>,
+    include: &'q [String],
+    exclude: &'q [String],
+) -> sqlx::query::QueryAs<'q, sqlx::Sqlite, O, sqlx::sqlite::SqliteArguments<'q>> {
+    for tag in include.iter().chain(exclude) {
+        query = query.bind(tag);
+    }
+    query
+}
+
 /// A tag suggestion for search autocomplete.
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow, serde::Serialize)]
 pub struct TagSuggestion {
@@ -556,45 +600,69 @@ impl Db {
             return self.list_image_assets(page, per_page).await;
         }
 
-        // Build dynamic query
-        let mut sql = String::from("SELECT DISTINCT ia.* FROM image_asset ia");
+        let sql = format!(
+            "{} ORDER BY ia.created_at DESC LIMIT ? OFFSET ?",
+            tag_filter_sql(include_tags, exclude_tags)
+        );
+        let q = bind_tag_filter(sqlx::query_as::<_, ImageAssetRow>(&sql), include_tags, exclude_tags);
+        Ok(q.bind(per_page).bind(offset).fetch_all(&self.pool).await?)
+    }
 
-        for (i, _) in include_tags.iter().enumerate() {
-            sql.push_str(&format!(
-                " JOIN image_tag it{i} ON ia.id = it{i}.image_id
-                  JOIN tag t{i} ON it{i}.tag_id = t{i}.id AND t{i}.name = ?"
-            ));
-        }
+    /// Gallery page folded by post: one row per post (images without a post
+    /// are their own group), newest group first. Each row is the group's
+    /// cover, the image with the most explicit rating (ties: first image of
+    /// the post), plus how many of the post's images match the filter.
+    /// Takes `limit`/`offset` rather than a page so callers can fetch one extra
+    /// row to learn whether there's a next page without shifting the offset.
+    pub async fn list_image_groups(
+        &self,
+        include_tags: &[String],
+        exclude_tags: &[String],
+        limit: i64,
+        offset: i64,
+    ) -> Result<Vec<ImageGroupRow>> {
+        let sql = format!(
+            "WITH f AS ({filter}),
+             r AS (
+               SELECT f.*, COALESCE(f.post_id, -f.id) AS grp,
+                 COALESCE((
+                   SELECT MAX(CASE t.name WHEN 'explicit' THEN 3 WHEN 'questionable' THEN 2
+                                          WHEN 'sensitive' THEN 1 WHEN 'general' THEN 0 END)
+                   FROM image_tag it JOIN tag t ON t.id = it.tag_id
+                   WHERE it.image_id = f.id AND t.category = 'rating'
+                 ), -1) AS rating_rank
+               FROM f),
+             w AS (
+               SELECT r.*,
+                 ROW_NUMBER() OVER (PARTITION BY grp ORDER BY rating_rank DESC, id ASC) AS rn,
+                 COUNT(*) OVER (PARTITION BY grp) AS group_size,
+                 MAX(created_at) OVER (PARTITION BY grp) AS group_created,
+                 MAX(id) OVER (PARTITION BY grp) AS group_last_id
+               FROM r)
+             SELECT id, post_id, sha256, s3_key_base, filename, width, height, file_size,
+                    content_type, source_url, created_at, updated_at, group_size
+             FROM w WHERE rn = 1
+             ORDER BY group_created DESC, group_last_id DESC
+             LIMIT ? OFFSET ?",
+            filter = tag_filter_sql(include_tags, exclude_tags)
+        );
+        let q = bind_tag_filter(sqlx::query_as::<_, ImageGroupRow>(&sql), include_tags, exclude_tags);
+        Ok(q.bind(limit).bind(offset).fetch_all(&self.pool).await?)
+    }
 
-        if !exclude_tags.is_empty() {
-            sql.push_str(
-                " WHERE ia.id NOT IN (
-                    SELECT image_id FROM image_tag it_ex
-                    JOIN tag t_ex ON it_ex.tag_id = t_ex.id
-                    WHERE t_ex.name IN (",
-            );
-            let placeholders = exclude_tags
-                .iter()
-                .map(|_| "?")
-                .collect::<Vec<_>>()
-                .join(", ");
-            sql.push_str(&placeholders);
-            sql.push_str("))");
-        }
-
-        sql.push_str(" ORDER BY ia.created_at DESC LIMIT ? OFFSET ?");
-
-        let mut q = sqlx::query_as::<_, ImageAssetRow>(&sql);
-        for tag in include_tags {
-            q = q.bind(tag);
-        }
-        for tag in exclude_tags {
-            q = q.bind(tag);
-        }
-        q = q.bind(per_page).bind(offset);
-
-        let rows = q.fetch_all(&self.pool).await?;
-        Ok(rows)
+    /// Images of one post that match the filter, in post order.
+    pub async fn list_post_images(
+        &self,
+        post_id: i64,
+        include_tags: &[String],
+        exclude_tags: &[String],
+    ) -> Result<Vec<ImageAssetRow>> {
+        let sql = format!(
+            "SELECT * FROM ({}) f WHERE f.post_id = ? ORDER BY f.id",
+            tag_filter_sql(include_tags, exclude_tags)
+        );
+        let q = bind_tag_filter(sqlx::query_as::<_, ImageAssetRow>(&sql), include_tags, exclude_tags);
+        Ok(q.bind(post_id).fetch_all(&self.pool).await?)
     }
 
     // ---- Tag ----
@@ -850,6 +918,76 @@ mod tests {
             ids.push(asset.id);
         }
         ids
+    }
+
+    async fn post(db: &Db, id: &str) -> i64 {
+        db.insert_post(
+            &GalleryImportPostArgs {
+                source_type: "pixiv",
+                source_post_id: id,
+                source_post_url: "https://example.invalid",
+                uploaded_at: None,
+                title: None,
+                caption: None,
+                raw_json: None,
+            },
+            None,
+        )
+        .await
+        .unwrap()
+        .id
+    }
+
+    /// Image in `post_id` with `tags`; returns its id.
+    async fn image(db: &Db, post_id: Option<i64>, key: &str, tags: &[&str]) -> i64 {
+        let asset = db
+            .claim_image_asset_upload_with_filename(post_id, key, key, None, None, None, None, "image/webp", None)
+            .await
+            .unwrap()
+            .expect("new sha256 is claimed")
+            .asset;
+        for tag in tags {
+            let category = if ["general", "sensitive", "questionable", "explicit"].contains(tag) { "rating" } else { "general" };
+            let tag = db.get_or_create_tag(tag, Some(category)).await.unwrap();
+            db.insert_image_tag(asset.id, tag.id, "wd14", Some(0.9)).await.unwrap();
+        }
+        asset.id
+    }
+
+    #[tokio::test]
+    async fn groups_fold_posts_with_most_explicit_cover() {
+        let db = temp_db("groups").await;
+        let a = post(&db, "a").await;
+        let a0 = image(&db, Some(a), "a0", &["sensitive", "1girl"]).await;
+        let a1 = image(&db, Some(a), "a1", &["explicit", "1girl"]).await;
+        let _a2 = image(&db, Some(a), "a2", &["questionable"]).await;
+        let lone = image(&db, None, "lone", &["general", "1girl"]).await;
+        let b = post(&db, "b").await;
+        let b0 = image(&db, Some(b), "b0", &["general", "1girl"]).await;
+        let _b1 = image(&db, Some(b), "b1", &["general"]).await;
+
+        let groups = db.list_image_groups(&[], &[], 50, 0).await.unwrap();
+        let summary: Vec<(i64, i64)> = groups.iter().map(|g| (g.asset.id, g.group_size)).collect();
+        // newest group first; cover = most explicit, ties -> first image of the post
+        assert_eq!(summary, [(b0, 2), (lone, 1), (a1, 3)]);
+
+        // with a filter, groups count only matching images and the cover is among them
+        let with_1girl = db.list_image_groups(&["1girl".into()], &[], 50, 0).await.unwrap();
+        let summary: Vec<(i64, i64)> = with_1girl.iter().map(|g| (g.asset.id, g.group_size)).collect();
+        assert_eq!(summary, [(b0, 1), (lone, 1), (a1, 2)]);
+        let not_explicit = db.list_image_groups(&[], &["explicit".into()], 50, 0).await.unwrap();
+        assert_eq!(not_explicit.last().map(|g| (g.asset.id, g.group_size)), Some((_a2, 2)));
+
+        // paging is by group; consecutive pages neither skip nor repeat
+        let first = db.list_image_groups(&[], &[], 2, 0).await.unwrap();
+        let rest = db.list_image_groups(&[], &[], 2, 2).await.unwrap();
+        let paged: Vec<i64> = first.iter().chain(&rest).map(|g| g.asset.id).collect();
+        assert_eq!(paged, [b0, lone, a1]);
+
+        // post images in post order, filtered
+        let ids = |rows: Vec<ImageAssetRow>| rows.into_iter().map(|r| r.id).collect::<Vec<_>>();
+        assert_eq!(ids(db.list_post_images(a, &[], &[]).await.unwrap()), [a0, a1, _a2]);
+        assert_eq!(ids(db.list_post_images(a, &["1girl".into()], &[]).await.unwrap()), [a0, a1]);
     }
 
     #[tokio::test]

@@ -210,6 +210,21 @@ async fn get_image_page(
     let filename = asset.filename.as_ref().unwrap_or(&def_filename);
     let url = resolve_image_url(&state, &s3_key, &asset.content_type, filename).await;
 
+    // other images of the same post, shown as a strip (current one highlighted)
+    let mut siblings = Vec::new();
+    if let Some(post_id) = asset.post_id {
+        let images = state
+            .db
+            .list_post_images(post_id, &[], &[])
+            .await
+            .unwrap_or_default();
+        if images.len() > 1 {
+            for img in &images {
+                siblings.push(index::card_view(&state, img, 1).await);
+            }
+        }
+    }
+
     let tags = state.db.get_image_tags(id).await.unwrap_or_default();
     let rendered_tags = tags
         .into_iter()
@@ -226,6 +241,7 @@ async fn get_image_page(
                 id,
                 url,
                 tags => rendered_tags,
+                siblings,
             },
         )
         .await
@@ -260,6 +276,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/style.css", get(get_stylesheet))
         .route("/", get(index::get_index))
         .route("/api/index/cards", get(index::get_index_cards))
+        .route("/api/posts/:post_id/cards", get(index::get_post_cards))
         .route("/image/:id", get(get_image_page))
         .route("/api/images", get(api::list_images))
         .route("/api/images/:id", get(api::get_image))

@@ -10,7 +10,7 @@
 <main class="app-shell">
 <header class="app-header">
   <h1 class="app-title"><a href="/">FulgorArt</a></h1>
-  <p class="app-subtitle"><span id="gallery-count">{{ count }}</span> images loaded</p>
+  <p class="app-subtitle"><span id="gallery-count">{{ count }}</span> shown</p>
 </header>
 <form class="search" action="/" method="get" role="search" autocomplete="off">
   <div class="search-field">
@@ -72,6 +72,40 @@
   }
 
   appendCards(stream);
+
+  // A folded card stands for several images of one post (badge = count).
+  // Clicking it swaps it for all of them, in place, keeping the search.
+  async function unfold(card) {
+    if (card.dataset.unfolding) return;
+    card.dataset.unfolding = '1';
+    try {
+      const response = await fetch(`/api/posts/${card.dataset.postId}/cards?q=${encodeURIComponent(query || '')}`);
+      if (!response.ok) return;
+      const container = document.createElement('div');
+      container.innerHTML = await response.text();
+      const cards = Array.from(container.children);
+      if (cards.length === 0) return;
+      const column = card.parentElement === leftColumn ? 0 : 1;
+      columnHeights[column] -= cardRatio(card) + CARD_GAP;
+      const fragment = document.createDocumentFragment();
+      for (const c of cards) {
+        columnHeights[column] += cardRatio(c) + CARD_GAP;
+        fragment.appendChild(c);
+      }
+      card.replaceWith(fragment);
+      cardCount += cards.length - 1;
+      count.textContent = String(cardCount);
+    } finally {
+      delete card.dataset.unfolding;
+    }
+  }
+
+  gallery.addEventListener('click', (event) => {
+    const card = event.target.closest('.masonry-card.folded');
+    if (!card) return;
+    event.preventDefault(); // unfold instead of opening the cover image
+    unfold(card);
+  });
 
   const observer = new IntersectionObserver((entries) => {
     if (entries.some((entry) => entry.isIntersecting)) {
